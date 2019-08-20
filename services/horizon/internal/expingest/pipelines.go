@@ -13,6 +13,7 @@ import (
 	horizonProcessors "github.com/stellar/go/services/horizon/internal/expingest/processors"
 	"github.com/stellar/go/support/db"
 	"github.com/stellar/go/support/errors"
+	"github.com/stellar/go/support/historyarchive"
 	ilog "github.com/stellar/go/support/log"
 	"github.com/stellar/go/xdr"
 )
@@ -219,6 +220,16 @@ func postProcessingHook(
 
 	if err := graph.Apply(); err != nil {
 		return errors.Wrap(err, "Error applying order book changes")
+	}
+
+	if pipelineType == ledgerPipeline && historyarchive.IsCheckpoint(ledgerSeq) {
+		// Run verification routine
+		go func() {
+			err := s.verifyState()
+			if err != nil {
+				log.WithField("err", err).Error("State verification errored")
+			}
+		}()
 	}
 
 	log.WithFields(ilog.F{"ledger": ledgerSeq, "type": pipelineType}).Info("Processed ledger")
