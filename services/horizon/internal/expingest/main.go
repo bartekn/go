@@ -91,8 +91,20 @@ func NewSystem(config Config) (*System, error) {
 		graph:          config.OrderBookGraph,
 	}
 
-	system.addPipelineHooks(session.StatePipeline)
-	system.addPipelineHooks(session.LedgerPipeline)
+	addPipelineHooks(
+		system,
+		session.StatePipeline,
+		config.HistorySession,
+		session,
+		config.OrderBookGraph,
+	)
+	addPipelineHooks(
+		system,
+		session.LedgerPipeline,
+		config.HistorySession,
+		session,
+		config.OrderBookGraph,
+	)
 
 	return system, nil
 }

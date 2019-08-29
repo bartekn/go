@@ -169,6 +169,7 @@ func postProcessingHook(
 	ctx context.Context,
 	err error,
 	pipelineType pType,
+	system *System,
 	graph *orderbook.OrderBookGraph,
 	historySession *db.Session,
 ) error {
@@ -225,7 +226,7 @@ func postProcessingHook(
 	if pipelineType == ledgerPipeline && historyarchive.IsCheckpoint(ledgerSeq) {
 		// Run verification routine
 		go func() {
-			err := s.verifyState()
+			err := system.verifyState()
 			if err != nil {
 				log.WithField("err", err).Error("State verification errored")
 			}
@@ -237,6 +238,7 @@ func postProcessingHook(
 }
 
 func addPipelineHooks(
+	system *System,
 	p supportPipeline.PipelineInterface,
 	historySession *db.Session,
 	ingestSession ingest.Session,
@@ -257,6 +259,6 @@ func addPipelineHooks(
 	})
 
 	p.AddPostProcessingHook(func(ctx context.Context, err error) error {
-		return postProcessingHook(ctx, err, pipelineType, graph, historySession)
+		return postProcessingHook(ctx, err, pipelineType, system, graph, historySession)
 	})
 }

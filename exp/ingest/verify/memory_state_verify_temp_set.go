@@ -4,7 +4,7 @@ type MemoryStateVerifyTempSet struct {
 	m map[string]bool
 }
 
-// Open initialize internals data structure.
+// Open initialize internal data structure.
 func (s *MemoryStateVerifyTempSet) Open() error {
 	s.m = make(map[string]bool)
 	return nil

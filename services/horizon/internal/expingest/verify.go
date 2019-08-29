@@ -97,7 +97,7 @@ func (s *System) verifyState() error {
 	if !ok {
 		// STATE IS INVALID! TODO: log reason why
 		localLog.WithField("err", verifier.StateError()).Error("STATE IS INVALID!")
-		// Save invalid state flag to a DB and panic.
+		// Save invalid state flag to a DB and exit.
 		panic(true)
 	}
 
@@ -162,19 +162,21 @@ func addAccountsToStateVerifier(verifier *verify.StateVerifier, q *history.Q) er
 		return errors.Wrap(err, "rows.Err returned error")
 	}
 
-	// Sort signers
-	account.Signers = xdr.SortSignersByKey(account.Signers)
+	if account != nil {
+		// Sort signers
+		account.Signers = xdr.SortSignersByKey(account.Signers)
 
-	// Add last created in a loop account
-	entry := xdr.LedgerEntry{
-		Data: xdr.LedgerEntryData{
-			Type:    xdr.LedgerEntryTypeAccount,
-			Account: account,
-		},
-	}
-	err = verifier.Add(entry)
-	if err != nil {
-		return err
+		// Add last created in a loop account
+		entry := xdr.LedgerEntry{
+			Data: xdr.LedgerEntryData{
+				Type:    xdr.LedgerEntryTypeAccount,
+				Account: account,
+			},
+		}
+		err = verifier.Add(entry)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

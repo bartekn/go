@@ -40,7 +40,7 @@ func (p *DatabaseProcessor) ProcessState(ctx context.Context, store *pipeline.St
 			accountEntry := entryChange.MustState().Data.MustAccount()
 			account := accountEntry.AccountId.Address()
 			for signer, weight := range accountEntry.SignerSummary() {
-				err = p.HistoryQ.InsertAccountSigner(
+				err = p.HistoryQ.UpsertAccountSigner(
 					account,
 					signer,
 					weight,
@@ -56,7 +56,7 @@ func (p *DatabaseProcessor) ProcessState(ctx context.Context, store *pipeline.St
 			}
 
 			offer := entryChange.MustState().Data.MustOffer()
-			if err := p.OffersQ.InsertOffer(offer, entryChange.MustState().LastModifiedLedgerSeq); err != nil {
+			if err := p.OffersQ.UpsertOffer(offer, entryChange.MustState().LastModifiedLedgerSeq); err != nil {
 				return errors.Wrap(err, "Error inserting offers")
 			}
 		default:
