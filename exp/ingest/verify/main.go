@@ -158,7 +158,7 @@ func (v *StateVerifier) Write(entry xdr.LedgerEntry) error {
 		return errors.Wrap(err, "Error marshaling expectedEntry")
 	}
 
-	if bytes.Compare(actualEntryMarshaled, expectedEntryMarshaled) != 0 {
+	if !bytes.Equal(actualEntryMarshaled, expectedEntryMarshaled) {
 		return StateError(errors.Errorf(
 			"Entry does not match the fetched entry. Expected: %s (pretransform = %s), actual: %s",
 			base64.StdEncoding.EncodeToString(expectedEntryMarshaled),
