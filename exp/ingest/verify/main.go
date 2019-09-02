@@ -3,7 +3,7 @@
 package verify
 
 import (
-	"crypto/sha256"
+	"bytes"
 	"encoding/base64"
 	stdio "io"
 
@@ -11,33 +11,6 @@ import (
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/xdr"
 )
-
-var (
-	errKeyNotFound      = errors.New("Key not found")
-	errKeyAlreadyExists = errors.New("Key already exists")
-)
-
-// TempSet is an interface that must be implemented by stores that
-// hold temporary set of objects for StateVerifier. The implementation
-// does not need to be thread-safe.
-// TempSet method are always called in the following order:
-//   - Open
-//   - Multiple Add
-//   - Multiple Remove
-//   - IsEmpty
-//   - Close
-// So it's possible to batch Add and Remove calls.
-type StateVerifyTempSet interface {
-	Open() error
-	// Add adds the key to the set. It should return error if the key already
-	// exists.
-	Add(key string) error
-	// Remove removes the key from the set. It should return error if the key is
-	// not found.
-	Remove(key string) error
-	IsEmpty() (bool, error)
-	Close() error
-}
 
 // TransformLedgerEntryFunction is a function that transforms ledger entry
 // into a form that should be compared to checkpoint state. It can be also used
@@ -47,110 +20,172 @@ type StateVerifyTempSet interface {
 // that will be used for equality check.
 type TransformLedgerEntryFunction func(xdr.LedgerEntry) (ignore bool, newEntry xdr.LedgerEntry)
 
+// StateError are errors indicating invalid state. Type is used to differentiate
+// between network, i/o, marshaling, bad usage etc. errors and actual state errors.
+type StateError error
+
 // StateVerifier verifies if ledger entries provided by Add method are the same
 // as in the checkpoint ledger entries provided by SingleLedgerStateReader.
-// Users should always call `Open` and `Close`.
+// The algorithm works in the following way:
+//   0. Develop TransformFunction. It should remove all fields and objects not
+//      stored in your app. For example, if you only store accounts, all other
+//      ledger entry types should be ignored (return ignore = true).
+//   1. In a loop, get entries from history archive by calling GetEntries()
+//      and Write() your version of entries found in the batch (in any order).
+//   2. When GetEntries() return no more entries, call Verify with a number of
+//      entries in your storage (to find if some extra entires exist in your
+//      storage).
+// Functions will return StateError type if state is found to be incorrect.
+// Check Horizon for an example how to use this tool.
 type StateVerifier struct {
 	StateReader *io.SingleLedgerStateReader
-	// TempSet is a StateVerifyTempSet implementation.
-	TempSet StateVerifyTempSet
 	// TransformFunction transforms (or ignores) ledger entries streamed from
-	// checkpoint buckets to match the form added by `Add`. Read
+	// checkpoint buckets to match the form added by `Write`. Read
 	// TransformLedgerEntryFunction godoc for more information.
 	TransformFunction TransformLedgerEntryFunction
 
-	stateCorruptedError error
+	readEntries  int
+	wroteEntries int
+	readingDone  bool
+
+	currentEntries map[string]xdr.LedgerEntry
 }
 
-func (v *StateVerifier) Open() error {
-	return v.TempSet.Open()
-}
-
-func (v *StateVerifier) Close() error {
-	return v.TempSet.Close()
-}
-
-func (v *StateVerifier) Add(entry xdr.LedgerEntry) error {
-	key, err := v.entryToKey(entry)
-	if err != nil {
-		return err
+// GetEntries returns count entries from history buckets.
+func (v *StateVerifier) GetEntries(count int) ([]xdr.LedgerEntry, error) {
+	entries := make([]xdr.LedgerEntry, 0, count)
+	if len(v.currentEntries) > 0 {
+		return entries, errors.New("Previous batch has not been fully processed")
 	}
+	v.currentEntries = make(map[string]xdr.LedgerEntry)
 
-	return v.TempSet.Add(key)
-}
-
-func (v *StateVerifier) entryToKey(entry xdr.LedgerEntry) (string, error) {
-	xdrEncoded, err := entry.MarshalBinary()
-	if err != nil {
-		return "", err
-	}
-
-	sum := sha256.Sum256(xdrEncoded)
-	key := base64.StdEncoding.EncodeToString(sum[:])
-	return key, nil
-}
-
-// Verify checks if (transformed) ledger entries from checkpoint buckets match
-// entries provided by `Add`.
-// Returns (false, nil) if state found to be invalid. Use `StateError` to get
-// actual reason why the state is found to be invalid. For other errors, it
-// returns (true, err).
-func (v *StateVerifier) Verify() (bool, error) {
-	for {
+	for count > 0 {
 		entryChange, err := v.StateReader.Read()
 		if err != nil {
 			if err == stdio.EOF {
-				break
+				v.readingDone = true
+				return entries, nil
 			}
-			return true, err
+			return entries, err
 		}
 
 		entry := entryChange.MustState()
-		preTransformEntry := entry
 
-		var ignore bool
 		if v.TransformFunction != nil {
-			ignore, entry = v.TransformFunction(entry)
+			ignore, _ := v.TransformFunction(entry)
 			if ignore {
 				continue
 			}
 		}
 
-		key, err := v.entryToKey(entry)
+		ledgerKey, err := entry.LedgerKey().MarshalBinary()
 		if err != nil {
-			return true, err
+			return entries, errors.Wrap(err, "Error marshaling ledgerKey")
 		}
+		key := base64.StdEncoding.EncodeToString(ledgerKey)
 
-		err = v.TempSet.Remove(key)
-		if err != nil {
-			if err == errKeyNotFound {
-				// We ignore errors here because "corrupted state error" has a priority
-				entryMarshaled, _ := entry.MarshalBinary()
-				preTransformEntryMarshaled, _ := preTransformEntry.MarshalBinary()
+		entries = append(entries, entry)
+		v.currentEntries[key] = entry
 
-				v.stateCorruptedError = errors.Errorf(
-					"Could not find entry %s (transformed = %s, key = %s) in added entries",
-					base64.StdEncoding.EncodeToString(preTransformEntryMarshaled),
-					base64.StdEncoding.EncodeToString(entryMarshaled),
-					key,
-				)
-				return false, nil
-			}
-			return true, err
-		}
+		count--
+		v.readEntries++
 	}
 
-	empty, err := v.TempSet.IsEmpty()
-	if err != nil {
-		v.stateCorruptedError = errors.New("Some entries added in Add has not been found in history archives")
-		return true, err
-	}
-
-	return empty, nil
+	return entries, nil
 }
 
-// StateError returns an explanation why the state is corrupted if
-// Verify returns false.
-func (v *StateVerifier) StateError() error {
-	return v.stateCorruptedError
+// Write compares the entry with entries in the latest batch of entries fetched
+// using `GetEntries`. Entries don't need to follow the order in entries returned
+// by `GetEntries`.
+// Any `StateError` returned by this method indicates invalid state!
+func (v *StateVerifier) Write(entry xdr.LedgerEntry) error {
+	actualEntry := entry
+	actualEntryMarshaled, err := actualEntry.MarshalBinary()
+	if err != nil {
+		return errors.Wrap(err, "Error marshaling actualEntry")
+	}
+
+	ledgerKey, err := actualEntry.LedgerKey().MarshalBinary()
+	if err != nil {
+		return errors.Wrap(err, "Error marshaling ledgerKey")
+	}
+	key := base64.StdEncoding.EncodeToString(ledgerKey)
+
+	expectedEntry, exist := v.currentEntries[key]
+	if !exist {
+		return StateError(errors.Errorf(
+			"Cannot find entry in currentEntries map: %s (key = %s)",
+			base64.StdEncoding.EncodeToString(actualEntryMarshaled),
+			key,
+		))
+	}
+	delete(v.currentEntries, key)
+
+	preTransformExpectedEntry := expectedEntry
+	preTransformExpectedEntryMarshaled, err := preTransformExpectedEntry.MarshalBinary()
+	if err != nil {
+		return errors.Wrap(err, "Error marshaling preTransformExpectedEntry")
+	}
+
+	if v.TransformFunction != nil {
+		var ignore bool
+		ignore, expectedEntry = v.TransformFunction(expectedEntry)
+		// Extra check: if entry was ignored in GetEntries, it shouldn't be
+		// ignored here.
+		if ignore {
+			return errors.Errorf(
+				"Entry ignored in GetEntries but not ignored in Write: %s. Possibly TransformFunction is buggy.",
+				base64.StdEncoding.EncodeToString(preTransformExpectedEntryMarshaled),
+			)
+		}
+	}
+
+	expectedEntryMarshaled, err := expectedEntry.MarshalBinary()
+	if err != nil {
+		return errors.Wrap(err, "Error marshaling expectedEntry")
+	}
+
+	if bytes.Compare(actualEntryMarshaled, expectedEntryMarshaled) != 0 {
+		return StateError(errors.Errorf(
+			"Entry does not match the fetched entry. Expected: %s (pretransform = %s), actual: %s",
+			base64.StdEncoding.EncodeToString(expectedEntryMarshaled),
+			base64.StdEncoding.EncodeToString(preTransformExpectedEntryMarshaled),
+			base64.StdEncoding.EncodeToString(actualEntryMarshaled),
+		))
+	}
+
+	v.wroteEntries++
+	return nil
+}
+
+// Verify should be run after all GetEntries/Write calls. If there were no errors
+// so far it means that all entries present in history buckets matches the entries
+// in application storage. However, it's still possible that state is invalid when:
+//   * Not all entries have been read from history buckets (ex. due to a bug).
+//   * Some entries were not compared using Write.
+//   * There are some extra entries in application storage not present in history
+//     buckets.
+// Any `StateError` returned by this method indicates invalid state!
+func (v *StateVerifier) Verify(countAll int) error {
+	if !v.readingDone {
+		return errors.New("There are unread entries in state reader. Process all entries before calling Verify.")
+	}
+
+	if v.readEntries != v.wroteEntries {
+		return StateError(errors.Errorf(
+			"Number of entries read using GetEntries (%d) does not match number of entries written using Write (%d).",
+			v.readEntries,
+			v.wroteEntries,
+		))
+	}
+
+	if v.readEntries != countAll {
+		return StateError(errors.Errorf(
+			"Number of entries read using GetEntries (%d) does not match number of entries in your storage (%d).",
+			v.readEntries,
+			countAll,
+		))
+	}
+
+	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/stellar/go/exp/ingest"
 	"github.com/stellar/go/exp/ingest/pipeline"
 	"github.com/stellar/go/exp/ingest/processors"
+	"github.com/stellar/go/exp/ingest/verify"
 	"github.com/stellar/go/exp/orderbook"
 	supportPipeline "github.com/stellar/go/exp/support/pipeline"
 	"github.com/stellar/go/services/horizon/internal/db2/history"
@@ -228,7 +229,13 @@ func postProcessingHook(
 		go func() {
 			err := system.verifyState()
 			if err != nil {
-				log.WithField("err", err).Error("State verification errored")
+				switch err := errors.Cause(err).(type) {
+				case verify.StateError:
+					log.WithField("err", err).Error("STATE IS INVALID!")
+					// TODO
+				default:
+					log.WithField("err", err).Error("State verification errored")
+				}
 			}
 		}()
 	}

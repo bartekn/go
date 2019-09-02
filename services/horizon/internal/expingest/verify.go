@@ -13,6 +13,8 @@ import (
 	"github.com/stellar/go/xdr"
 )
 
+const verifyBatchSize = 50000
+
 func (s *System) verifyState() error {
 	if s.stateVerificationRunning {
 		log.Warn("State verification is already running...")
@@ -42,7 +44,7 @@ func (s *System) verifyState() error {
 	// Ensure the ledger is a checkpoint ledger
 	ledgerSequence, err := historyQ.GetLastLedgerExpIngestNonBlocking()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "Error running historyQ.GetLastLedgerExpIngestNonBlocking")
 	}
 
 	localLog := log.WithFields(ilog.F{
@@ -55,14 +57,16 @@ func (s *System) verifyState() error {
 		return nil
 	}
 
-	localLog.Info("Starting state verification...")
+	localLog.Info("Starting state verification. Waiting 20 seconds for stellar-core to publish HAS...")
 
 	// Wait for stellar-core to publish HAS
 	time.Sleep(20 * time.Second)
 
+	localLog.Info("Creating state reader...")
+
 	stateReader, err := io.MakeSingleLedgerStateReader(
 		s.session.Archive,
-		&io.MemoryTempSet{}, // TODO change to postgres
+		&io.MemoryTempSet{},
 		ledgerSequence,
 	)
 	if err != nil {
@@ -71,55 +75,80 @@ func (s *System) verifyState() error {
 
 	verifier := &verify.StateVerifier{
 		StateReader:       stateReader,
-		TempSet:           &verify.MemoryStateVerifyTempSet{},
 		TransformFunction: transformEntry,
 	}
 
-	err = verifier.Open()
-	if err != nil {
-		return errors.Wrap(err, "Error opening StateVerifier")
-	}
-	defer verifier.Close()
+	total := 0
+	for {
+		entries, err := verifier.GetEntries(verifyBatchSize)
+		if err != nil {
+			return errors.Wrap(err, "verifier.GetEntries")
+		}
 
-	localLog.Info("Adding accounts to StateVerifier...")
-	err = addAccountsToStateVerifier(verifier, historyQ)
-	if err != nil {
-		return errors.Wrap(err, "addAccountsToStateVerifier failed")
-	}
-	localLog.Info("Accounts added to StateVerifier")
+		if len(entries) == 0 {
+			break
+		}
 
-	localLog.Info("Comparing with history archive...")
-	ok, err := verifier.Verify()
-	if err != nil {
-		return errors.Wrap(err, "Error running verifier.Verify")
+		accounts := make([]string, 0, verifyBatchSize)
+		offers := make([]int64, 0, verifyBatchSize)
+		for _, entry := range entries {
+			switch entry.Data.Type {
+			case xdr.LedgerEntryTypeAccount:
+				accounts = append(accounts, entry.Data.Account.AccountId.Address())
+			case xdr.LedgerEntryTypeOffer:
+				offers = append(offers, int64(entry.Data.Offer.OfferId))
+			default:
+				return errors.New("GetEntries return unexpected entry type")
+			}
+		}
+
+		err = addAccountsToStateVerifier(verifier, historyQ, accounts)
+		if err != nil {
+			return errors.Wrap(err, "addAccountsToStateVerifier failed")
+		}
+
+		err = addOffersToStateVerifier(verifier, historyQ, offers)
+		if err != nil {
+			return errors.Wrap(err, "addOffersToStateVerifier failed")
+		}
+
+		total += len(entries)
+		localLog.WithField("total", total).Info("Batch added to StateVerifier")
 	}
 
-	if !ok {
-		// STATE IS INVALID! TODO: log reason why
-		localLog.WithField("err", verifier.StateError()).Error("STATE IS INVALID!")
-		// Save invalid state flag to a DB and exit.
-		panic(true)
+	localLog.WithField("total", total).Info("Finished writing to StateVerifier")
+
+	countAccounts, err := historyQ.CountAccounts()
+	if err != nil {
+		return errors.Wrap(err, "Error running historyQ.CountAccounts")
+	}
+
+	countOffers, err := historyQ.CountOffers()
+	if err != nil {
+		return errors.Wrap(err, "Error running historyQ.CountOffers")
+	}
+
+	err = verifier.Verify(countAccounts + countOffers)
+	if err != nil {
+		return errors.Wrap(err, "verifier.Verify failed")
 	}
 
 	localLog.Info("State correct")
 	return nil
 }
 
-func addAccountsToStateVerifier(verifier *verify.StateVerifier, q *history.Q) error {
-	rows, err := q.StreamAccounts()
-	if err != nil {
-		return errors.Wrap(err, "Error running history.Q.StreamAccounts")
+func addAccountsToStateVerifier(verifier *verify.StateVerifier, q *history.Q, ids []string) error {
+	if len(ids) == 0 {
+		return nil
 	}
-	defer rows.Close()
+
+	signers, err := q.SignersForAccounts(ids)
+	if err != nil {
+		return errors.Wrap(err, "Error running history.Q.SignersForAccounts")
+	}
 
 	var account *xdr.AccountEntry
-
-	for rows.Next() {
-		var row history.AccountSigner
-		if err := rows.Scan(&row.Account, &row.Signer, &row.Weight); err != nil {
-			return errors.Wrap(err, "rows.Scan returned error")
-		}
-
+	for _, row := range signers {
 		if account == nil || account.AccountId.Address() != row.Account {
 			if account != nil {
 				// Sort signers
@@ -131,7 +160,7 @@ func addAccountsToStateVerifier(verifier *verify.StateVerifier, q *history.Q) er
 						Account: account,
 					},
 				}
-				err := verifier.Add(entry)
+				err := verifier.Write(entry)
 				if err != nil {
 					return err
 				}
@@ -158,10 +187,6 @@ func addAccountsToStateVerifier(verifier *verify.StateVerifier, q *history.Q) er
 		}
 	}
 
-	if err := rows.Err(); err != nil {
-		return errors.Wrap(err, "rows.Err returned error")
-	}
-
 	if account != nil {
 		// Sort signers
 		account.Signers = xdr.SortSignersByKey(account.Signers)
@@ -173,7 +198,45 @@ func addAccountsToStateVerifier(verifier *verify.StateVerifier, q *history.Q) er
 				Account: account,
 			},
 		}
-		err = verifier.Add(entry)
+		err = verifier.Write(entry)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func addOffersToStateVerifier(verifier *verify.StateVerifier, q *history.Q, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	offers, err := q.GetOffersByIDs(ids)
+	if err != nil {
+		return errors.Wrap(err, "Error running history.Q.GetOfferByIDs")
+	}
+
+	for _, row := range offers {
+		entry := xdr.LedgerEntry{
+			LastModifiedLedgerSeq: xdr.Uint32(row.LastModifiedLedger),
+			Data: xdr.LedgerEntryData{
+				Type: xdr.LedgerEntryTypeOffer,
+				Offer: &xdr.OfferEntry{
+					SellerId: xdr.MustAddress(row.SellerID),
+					OfferId:  row.OfferID,
+					Selling:  row.SellingAsset,
+					Buying:   row.BuyingAsset,
+					Amount:   row.Amount,
+					Price: xdr.Price{
+						N: xdr.Int32(row.Pricen),
+						D: xdr.Int32(row.Priced),
+					},
+					Flags: xdr.Uint32(row.Flags),
+				},
+			},
+		}
+		err := verifier.Write(entry)
 		if err != nil {
 			return err
 		}
@@ -187,8 +250,8 @@ func transformEntry(entry xdr.LedgerEntry) (bool, xdr.LedgerEntry) {
 	case xdr.LedgerEntryTypeAccount:
 		accountEntry := entry.Data.Account
 
-		// We don't store account accounts with no signers (including master).
-		// Ignore such accounts for now.
+		// We don't store accounts with no signers and no master.
+		// Ignore such accounts.
 		if accountEntry.MasterKeyWeight() == 0 && len(accountEntry.Signers) == 0 {
 			return true, xdr.LedgerEntry{}
 		}
@@ -207,11 +270,11 @@ func transformEntry(entry xdr.LedgerEntry) (bool, xdr.LedgerEntry) {
 				},
 			},
 		}
+	case xdr.LedgerEntryTypeOffer:
+		// Full check of offer object
+		return false, entry
 	case xdr.LedgerEntryTypeTrustline:
 		// Ignore
-		return true, xdr.LedgerEntry{}
-	case xdr.LedgerEntryTypeOffer:
-		// TODO check offers
 		return true, xdr.LedgerEntry{}
 	case xdr.LedgerEntryTypeData:
 		// Ignore

@@ -1,26 +1,31 @@
 package history
 
 import (
-	"database/sql"
-
 	sq "github.com/Masterminds/squirrel"
 	"github.com/stellar/go/services/horizon/internal/db2"
 	"github.com/stellar/go/support/errors"
 )
 
-// StreamAccounts streams accounts from a DB. This currently only
-// streams signers. Used in state verification code.
-func (q *Q) StreamAccounts() (*sql.Rows, error) {
-	// TODO index on `account`
-	return sq.Select(
-		"accounts_signers.account",
-		"accounts_signers.signer",
-		"accounts_signers.weight",
-	).
-		From("accounts_signers").
-		OrderBy("accounts_signers.account ASC").
-		RunWith(q.Session.GetTx().Tx).
-		Query()
+func (q *Q) CountAccounts() (int, error) {
+	sql := sq.Select("count(distinct account)").From("accounts_signers")
+
+	var count int
+	if err := q.Get(&count, sql); err != nil {
+		return 0, errors.Wrap(err, "could not run select query")
+	}
+
+	return count, nil
+}
+
+func (q *Q) SignersForAccounts(accounts []string) ([]AccountSigner, error) {
+	sql := selectAccountSigners.Where(map[string]interface{}{"accounts_signers.account": accounts})
+
+	var results []AccountSigner
+	if err := q.Select(&results, sql); err != nil {
+		return nil, errors.Wrap(err, "could not run select query")
+	}
+
+	return results, nil
 }
 
 // AccountsForSigner returns a list of `AccountSigner` rows for a given signer
