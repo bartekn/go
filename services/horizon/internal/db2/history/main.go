@@ -310,7 +310,7 @@ type QSigners interface {
 	GetLastLedgerExpIngest() (uint32, error)
 	UpdateLastLedgerExpIngest(ledgerSequence uint32) error
 	AccountsForSigner(signer string, page db2.PageQuery) ([]AccountSigner, error)
-	UpsertAccountSigner(account, signer string, weight int32) error
+	CreateAccountSigner(account, signer string, weight int32) error
 	RemoveAccountSigner(account, signer string) error
 }
 

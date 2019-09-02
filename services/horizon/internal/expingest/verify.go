@@ -80,25 +80,25 @@ func (s *System) verifyState() error {
 
 	total := 0
 	for {
-		entries, err := verifier.GetEntries(verifyBatchSize)
+		keys, err := verifier.GetLedgerKeys(verifyBatchSize)
 		if err != nil {
-			return errors.Wrap(err, "verifier.GetEntries")
+			return errors.Wrap(err, "verifier.GetLedgerKeys")
 		}
 
-		if len(entries) == 0 {
+		if len(keys) == 0 {
 			break
 		}
 
 		accounts := make([]string, 0, verifyBatchSize)
 		offers := make([]int64, 0, verifyBatchSize)
-		for _, entry := range entries {
-			switch entry.Data.Type {
+		for _, key := range keys {
+			switch key.Type {
 			case xdr.LedgerEntryTypeAccount:
-				accounts = append(accounts, entry.Data.Account.AccountId.Address())
+				accounts = append(accounts, key.Account.AccountId.Address())
 			case xdr.LedgerEntryTypeOffer:
-				offers = append(offers, int64(entry.Data.Offer.OfferId))
+				offers = append(offers, int64(key.Offer.OfferId))
 			default:
-				return errors.New("GetEntries return unexpected entry type")
+				return errors.New("GetLedgerKeys return unexpected type")
 			}
 		}
 
@@ -112,7 +112,7 @@ func (s *System) verifyState() error {
 			return errors.Wrap(err, "addOffersToStateVerifier failed")
 		}
 
-		total += len(entries)
+		total += len(keys)
 		localLog.WithField("total", total).Info("Batch added to StateVerifier")
 	}
 

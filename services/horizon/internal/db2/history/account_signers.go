@@ -44,17 +44,8 @@ func (q *Q) AccountsForSigner(signer string, page db2.PageQuery) ([]AccountSigne
 	return results, nil
 }
 
-// InsertAccountSigner creates a row in the accounts_signers table
-func (q *Q) InsertAccountSigner(account, signer string, weight int32) error {
-	sql := sq.Insert("accounts_signers").
-		Columns("account", "signer", "weight").
-		Values(account, signer, weight)
-	_, err := q.Exec(sql)
-	return err
-}
-
-// UpsertAccountSigner creates a row in the accounts_signers table
-func (q *Q) UpsertAccountSigner(account, signer string, weight int32) error {
+// CreateAccountSigner creates a row in the accounts_signers table
+func (q *Q) CreateAccountSigner(account, signer string, weight int32) error {
 	sql := sq.Insert("accounts_signers").
 		Columns("account", "signer", "weight").
 		Values(account, signer, weight).

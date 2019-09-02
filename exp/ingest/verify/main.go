@@ -51,11 +51,25 @@ type StateVerifier struct {
 	currentEntries map[string]xdr.LedgerEntry
 }
 
-// GetEntries returns count entries from history buckets.
-func (v *StateVerifier) GetEntries(count int) ([]xdr.LedgerEntry, error) {
-	entries := make([]xdr.LedgerEntry, 0, count)
+// GetLedgerKeys returns `count` ledger keys from history buckets storing
+// actual entries in cache to compare in Write.
+func (v *StateVerifier) GetLedgerKeys(count int) ([]xdr.LedgerKey, error) {
+	keys := make([]xdr.LedgerKey, 0, count)
 	if len(v.currentEntries) > 0 {
-		return entries, errors.New("Previous batch has not been fully processed")
+		var entry xdr.LedgerEntry
+		for _, e := range v.currentEntries {
+			entry = e
+			break
+		}
+
+		// Ignore error as StateError below is more important
+		entryString, _ := xdr.MarshalBase64(entry)
+		err := StateError(errors.Errorf(
+			"Entries (%d) not found locally, example: %s",
+			len(v.currentEntries),
+			entryString,
+		))
+		return keys, err
 	}
 	v.currentEntries = make(map[string]xdr.LedgerEntry)
 
@@ -64,9 +78,9 @@ func (v *StateVerifier) GetEntries(count int) ([]xdr.LedgerEntry, error) {
 		if err != nil {
 			if err == stdio.EOF {
 				v.readingDone = true
-				return entries, nil
+				return keys, nil
 			}
-			return entries, err
+			return keys, err
 		}
 
 		entry := entryChange.MustState()
@@ -78,20 +92,20 @@ func (v *StateVerifier) GetEntries(count int) ([]xdr.LedgerEntry, error) {
 			}
 		}
 
-		ledgerKey, err := entry.LedgerKey().MarshalBinary()
+		ledgerKey := entry.LedgerKey()
+		key, err := xdr.MarshalBase64(ledgerKey)
 		if err != nil {
-			return entries, errors.Wrap(err, "Error marshaling ledgerKey")
+			return keys, errors.Wrap(err, "Error marshaling ledgerKey")
 		}
-		key := base64.StdEncoding.EncodeToString(ledgerKey)
 
-		entries = append(entries, entry)
+		keys = append(keys, ledgerKey)
 		v.currentEntries[key] = entry
 
 		count--
 		v.readEntries++
 	}
 
-	return entries, nil
+	return keys, nil
 }
 
 // Write compares the entry with entries in the latest batch of entries fetched
@@ -105,11 +119,10 @@ func (v *StateVerifier) Write(entry xdr.LedgerEntry) error {
 		return errors.Wrap(err, "Error marshaling actualEntry")
 	}
 
-	ledgerKey, err := actualEntry.LedgerKey().MarshalBinary()
+	key, err := xdr.MarshalBase64(actualEntry.LedgerKey())
 	if err != nil {
 		return errors.Wrap(err, "Error marshaling ledgerKey")
 	}
-	key := base64.StdEncoding.EncodeToString(ledgerKey)
 
 	expectedEntry, exist := v.currentEntries[key]
 	if !exist {
@@ -167,6 +180,22 @@ func (v *StateVerifier) Write(entry xdr.LedgerEntry) error {
 //     buckets.
 // Any `StateError` returned by this method indicates invalid state!
 func (v *StateVerifier) Verify(countAll int) error {
+	if len(v.currentEntries) > 0 {
+		var entry xdr.LedgerEntry
+		for _, e := range v.currentEntries {
+			entry = e
+			break
+		}
+
+		// Ignore error as StateError below is more important
+		entryString, _ := xdr.MarshalBase64(entry)
+		return StateError(errors.Errorf(
+			"Entries (%d) not found locally, example: %s",
+			len(v.currentEntries),
+			entryString,
+		))
+	}
+
 	if !v.readingDone {
 		return errors.New("There are unread entries in state reader. Process all entries before calling Verify.")
 	}
