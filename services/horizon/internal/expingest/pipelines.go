@@ -224,7 +224,7 @@ func postProcessingHook(
 		return errors.Wrap(err, "Error applying order book changes")
 	}
 
-	if pipelineType == ledgerPipeline && historyarchive.IsCheckpoint(ledgerSeq) {
+	if system != nil && pipelineType == ledgerPipeline && historyarchive.IsCheckpoint(ledgerSeq) {
 		// Run verification routine
 		go func() {
 			err := system.verifyState()

@@ -80,7 +80,8 @@ func (s *System) verifyState() error {
 
 	total := 0
 	for {
-		keys, err := verifier.GetLedgerKeys(verifyBatchSize)
+		var keys []xdr.LedgerKey
+		keys, err = verifier.GetLedgerKeys(verifyBatchSize)
 		if err != nil {
 			return errors.Wrap(err, "verifier.GetLedgerKeys")
 		}
@@ -160,7 +161,7 @@ func addAccountsToStateVerifier(verifier *verify.StateVerifier, q *history.Q, id
 						Account: account,
 					},
 				}
-				err := verifier.Write(entry)
+				err = verifier.Write(entry)
 				if err != nil {
 					return err
 				}
