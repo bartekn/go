@@ -15,20 +15,29 @@ import (
 
 const verifyBatchSize = 50000
 
+// verifyState is called as a go routine from pipeline post hook every 64
+// ledgers. It checks if the state is correct. If another go routine is already
+// running it exists.
 func (s *System) verifyState() error {
+	s.stateVerificationMutex.Lock()
 	if s.stateVerificationRunning {
 		log.Warn("State verification is already running...")
+		s.stateVerificationMutex.Unlock()
 		return nil
 	}
-
 	s.stateVerificationRunning = true
+	s.stateVerificationMutex.Unlock()
+
 	startTime := time.Now()
 	session := s.historySession.Clone()
 
 	defer func() {
 		log.WithField("duration", time.Since(startTime).Seconds()).Info("State verification finished")
 		session.Rollback()
+
+		s.stateVerificationMutex.Lock()
 		s.stateVerificationRunning = false
+		s.stateVerificationMutex.Unlock()
 	}()
 
 	err := session.BeginTx(&sql.TxOptions{

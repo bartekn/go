@@ -5,6 +5,7 @@ package expingest
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/stellar/go/clients/stellarcore"
@@ -53,6 +54,7 @@ type System struct {
 
 	// stateVerificationRunning is true when verification routine is currently
 	// running.
+	stateVerificationMutex   sync.Mutex
 	stateVerificationRunning bool
 }
 
