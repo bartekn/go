@@ -178,6 +178,12 @@ func (s *System) Run() {
 				return errors.Wrap(err, "Error updating last ingested ledger")
 			}
 
+			// Clear invalid state in key value store. It's possible that upgraded
+			// ingestion is fixing it.
+			if err = s.historyQ.UpdateExpStateInvalid(false); err != nil {
+				return errors.Wrap(err, "Error updating state invalid value")
+			}
+
 			err = s.historyQ.Session.TruncateTables(
 				history.ExperimentalIngestionTables,
 			)

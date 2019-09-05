@@ -120,7 +120,7 @@ func installPathFindingRoutes(
 	r *chi.Mux,
 ) {
 	r.Group(func(r chi.Router) {
-		r.Use(acceptOnlyJSON)
+		r.Use(acceptOnlyJSON, ensureStateCorrect)
 		r.Method("GET", "/paths", findPaths)
 		r.Method("GET", "/paths/strict-receive", findPaths)
 		r.Method("GET", "/paths/strict-send", findFixedPaths)
@@ -152,7 +152,7 @@ func (w *web) mustInstallActions(config Config, pathFinder paths.Finder) {
 
 	// account actions
 	r.Route("/accounts", func(r chi.Router) {
-		r.With(requiresExperimentalIngestion).
+		r.With(requiresExperimentalIngestion, ensureStateCorrect).
 			Get("/", accountIndexActionHandler(w.getAccountPage))
 		r.Route("/{account_id}", func(r chi.Router) {
 			r.Get("/", w.streamShowActionHandler(w.getAccountInfo, true))

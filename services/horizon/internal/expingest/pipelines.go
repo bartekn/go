@@ -232,7 +232,10 @@ func postProcessingHook(
 				switch err := errors.Cause(err).(type) {
 				case verify.StateError:
 					log.WithField("err", err).Error("STATE IS INVALID!")
-					// TODO
+					q := &history.Q{historySession.Clone()}
+					if err := q.UpdateExpStateInvalid(true); err != nil {
+						log.WithField("err", err).Error("Error updating state invalid value")
+					}
 				default:
 					log.WithField("err", err).Error("State verification errored")
 				}

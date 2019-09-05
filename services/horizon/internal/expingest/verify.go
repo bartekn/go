@@ -72,6 +72,7 @@ func (s *System) verifyState() error {
 	if err != nil {
 		return errors.Wrap(err, "Error running io.MakeSingleLedgerStateReader")
 	}
+	defer stateReader.Close()
 
 	verifier := &verify.StateVerifier{
 		StateReader:       stateReader,
