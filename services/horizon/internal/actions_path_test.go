@@ -30,7 +30,7 @@ func pathFindingClient(tt *test.T, pathFinder paths.Finder) test.RequestHelper {
 		coreQ:      &core.Q{tt.CoreSession()},
 	}
 
-	installPathFindingRoutes(findPaths, findFixedPaths, router)
+	installPathFindingRoutes(findPaths, findFixedPaths, router, false)
 	return test.NewRequestHelper(router)
 }
 
@@ -107,6 +107,17 @@ func TestPathActionsStillIngesting(t *testing.T) {
 		assertions.Equal(horizonProblem.StillIngesting.Status, w.Code)
 		assertions.Problem(w.Body, horizonProblem.StillIngesting)
 	}
+}
+
+func TestPathActionsStateInvalid(t *testing.T) {
+	rh := StartHTTPTest(t, "paths")
+	defer rh.Finish()
+
+	err := rh.App.historyQ.UpdateExpStateInvalid(true)
+	rh.Assert.NoError(err)
+
+	w := rh.Get("/paths")
+	rh.Assert.Equal(500, w.Code)
 }
 
 func loadOffers(tt *test.T, orderBookGraph *orderbook.OrderBookGraph, fromAddress string) {

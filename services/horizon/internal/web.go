@@ -118,9 +118,13 @@ func installPathFindingRoutes(
 	findPaths FindPathsHandler,
 	findFixedPaths FindFixedPathsHandler,
 	r *chi.Mux,
+	checkState bool,
 ) {
 	r.Group(func(r chi.Router) {
-		r.Use(acceptOnlyJSON, ensureStateCorrect)
+		r.Use(acceptOnlyJSON)
+		if checkState {
+			r.Use(ensureStateCorrect)
+		}
 		r.Method("GET", "/paths", findPaths)
 		r.Method("GET", "/paths/strict-receive", findPaths)
 		r.Method("GET", "/paths/strict-send", findFixedPaths)
@@ -218,7 +222,7 @@ func (w *web) mustInstallActions(config Config, pathFinder paths.Finder) {
 		pathFinder:    pathFinder,
 		coreQ:         w.coreQ,
 	}
-	installPathFindingRoutes(findPaths, findFixedPaths, w.router)
+	installPathFindingRoutes(findPaths, findFixedPaths, w.router, true)
 
 	if config.EnableAssetStats {
 		// Asset related endpoints

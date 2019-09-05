@@ -212,7 +212,7 @@ func requiresExperimentalIngestion(h http.Handler) http.Handler {
 		ctx := r.Context()
 		app := AppFromContext(ctx)
 		if !app.config.EnableExperimentalIngestion {
-			w.WriteHeader(http.StatusNotFound)
+			problem.Render(r.Context(), w, problem.NotFound)
 			return
 		}
 
@@ -239,10 +239,6 @@ func ensureStateCorrect(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		app := AppFromContext(ctx)
-		if !app.config.EnableExperimentalIngestion {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
 
 		stateInvalid, err := app.HistoryQ().GetExpStateInvalid()
 		if err != nil {
@@ -251,7 +247,7 @@ func ensureStateCorrect(h http.Handler) http.Handler {
 		}
 
 		if stateInvalid {
-			problem.Render(r.Context(), w, hProblem.StillIngesting)
+			problem.Render(r.Context(), w, problem.ServerError)
 			return
 		}
 
