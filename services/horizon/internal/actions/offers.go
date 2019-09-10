@@ -3,172 +3,103 @@ package actions
 import (
 	"context"
 	"net/http"
+	"net/url"
 
 	"github.com/stellar/go/protocols/horizon"
-	"github.com/stellar/go/services/horizon/internal/db2"
 	"github.com/stellar/go/services/horizon/internal/db2/history"
-	"github.com/stellar/go/services/horizon/internal/render/sse"
 	"github.com/stellar/go/services/horizon/internal/resourceadapter"
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/support/render/hal"
-	"github.com/stellar/go/support/render/httpjson"
-	"github.com/stellar/go/support/render/problem"
-	"github.com/stellar/go/xdr"
 )
 
-// GetOffersHandler is the http handler for the /offers endpoint
+// Just an example, not part of this file in the final version:
+type BaseAction interface {
+	// Ideally all below would be an annotation however Golang
+	// does not have a support for annotations so we use methods instead.
+	Method() string             // GET, POST, ...
+	Route() string              // ex. `/operation/{id}`
+	RequiresNewIngestion() bool // if true add a middleware
+	Streamable() bool           // is streamable if true
+	// Other methods that will be helpful with rendeing
+}
+
+type ObjectAction interface {
+	BaseAction
+	GetObject(url url.URL) (hal.Pageable, error)
+}
+
+type PageAction interface {
+	BaseAction
+	GetPage(url url.URL) ([]hal.Pageable, error)
+}
+
+// This is just for an example. If our action is custom (we don't
+// return []hal.Pageable or hal.Pageable), Handler/Action can implement
+// http.Handler so it will be responsible for full rendering of the response.
+// I think we currently have 3-4 actions like this in Horizon.
+type CustomAction interface {
+	BaseAction
+	http.Handler
+}
+
+// Above: Just an example, not part of this file in the final version
+// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+// GetOffersHandler is the http handler for the /offers endpoint.
+// Implements BaseAction and PageAction.
 type GetOffersHandler struct {
+	// We can build helper structs to embed here to prevent Method()
+	// duplication. Ex: `util.GetHandler` that implements:
+	// Method() string { return http.MethodGet }
 	HistoryQ *history.Q
 }
 
-// ServeHTTP implements the http.Handler interface
-func (handler GetOffersHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	pq, err := GetPageQuery(r)
-
-	if err != nil {
-		problem.Render(ctx, w, err)
-		return
-	}
-
-	seller, err := GetString(r, "seller")
-
-	if err != nil {
-		problem.Render(ctx, w, err)
-		return
-	}
-
-	var selling *xdr.Asset
-	sellingAsset, found := MaybeGetAsset(r, "selling_")
-
-	if found {
-		selling = &sellingAsset
-	}
-
-	var buying *xdr.Asset
-	buyingAsset, found := MaybeGetAsset(r, "buying_")
-
-	if found {
-		buying = &buyingAsset
-	}
-
-	query := history.OffersQuery{
-		PageQuery: pq,
-		SellerID:  seller,
-		Selling:   selling,
-		Buying:    buying,
-	}
-
-	offers, err := loadOffersQuery(ctx, handler.HistoryQ, query)
-
-	if err != nil {
-		problem.Render(ctx, w, err)
-		return
-	}
-
-	httpjson.Render(
-		w,
-		buildOffersPage(ctx, query.PageQuery, offers),
-		httpjson.HALJSON,
-	)
-
+func (handler GetOffersHandler) Method() string {
+	return http.MethodGet
 }
 
-// GetAccountOffersHandler is the http handler for the
-// `/accounts/{account_id}/offers` endpoint when using experimental ingestion.
-type GetAccountOffersHandler struct {
-	HistoryQ      *history.Q
-	StreamHandler StreamHandler
+func (handler GetOffersHandler) Route() string {
+	return "/offers"
 }
 
-func (handler GetAccountOffersHandler) parseOffersQuery(w http.ResponseWriter, r *http.Request) (history.OffersQuery, error) {
-	pq, err := GetPageQuery(r)
-	if err != nil {
-		return history.OffersQuery{}, err
-	}
-
-	seller, err := GetString(r, "account_id")
-	if err != nil {
-		return history.OffersQuery{}, err
-	}
-
-	query := history.OffersQuery{
-		PageQuery: pq,
-		SellerID:  seller,
-	}
-
-	return query, nil
+func (handler GetOffersHandler) Streamable() bool {
+	return true
 }
 
-// GetOffers loads and renders an account's offers page.
-func (handler GetAccountOffersHandler) GetOffers(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	query, err := handler.parseOffersQuery(w, r)
-
-	if err != nil {
-		problem.Render(ctx, w, err)
-		return
-	}
-
-	offers, err := loadOffersQuery(ctx, handler.HistoryQ, query)
-
-	if err != nil {
-		problem.Render(ctx, w, err)
-		return
-	}
-
-	httpjson.Render(
-		w,
-		buildOffersPage(ctx, query.PageQuery, offers),
-		httpjson.HALJSON,
-	)
+// This probably belongs to protocols/horizon
+type GetOffersParams struct {
+	Cursor int64 `name:"cursor", validate:"cursor"`
+	Limit  int   `name:"limit", validate:"limit"`
+	Order  Order `name:"order", validate:"order"`
 }
 
-// StreamOffers loads and renders an account's offers via SSE.
-func (handler GetAccountOffersHandler) StreamOffers(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	query, err := handler.parseOffersQuery(w, r)
+func (handler GetOffersHandler) GetPage(url url.URL) ([]hal.Pageable, error) {
+	var params horizon.GetOffersParams
+	// util.ParseQuery is using reflection to fill GetOffersParams using
+	// struct tags. This is automating code like:
+	// `seller, err := GetString(r, "seller")`
+	// and can be part of a shared package so any app can use it.
+	err := util.ParseQuery(&params, url)
 	if err != nil {
-		problem.Render(ctx, w, err)
-		return
+		return nil, errors.Wrap(err, "error parsing a query")
 	}
 
-	handler.StreamHandler.ServeStream(
-		w,
-		r,
-		int(query.PageQuery.Limit),
-		func() ([]sse.Event, error) {
-			offers, err := loadOffersQuery(ctx, handler.HistoryQ, query)
-			if err != nil {
-				return nil, err
-			}
-
-			var events []sse.Event
-			for _, offer := range offers {
-				events = append(events, sse.Event{ID: offer.PagingToken(), Data: offer})
-			}
-
-			if len(events) > 0 {
-				query.PageQuery.Cursor = events[len(events)-1].ID
-			}
-
-			return events, nil
-		},
-	)
-}
-
-func loadOffersQuery(ctx context.Context, historyQ *history.Q, query history.OffersQuery) ([]horizon.Offer, error) {
-	records, err := historyQ.GetOffers(query)
+	records, err := handler.HistoryQ.GetOffers(history.OffersQuery{
+		PageQuery: params.PageQuery,
+		SellerID:  params.SellerID,
+		Selling:   params.Selling,
+		Buying:    params.Buying,
+	})
 
 	if err != nil {
-		return []horizon.Offer{}, err
+		return nil, err
 	}
 
-	offers, err := buildOffersResponse(ctx, historyQ, records)
-
-	return offers, err
+	return buildOffersResponse(ctx, handler.HistoryQ, records)
 }
 
+// This is not a method on GetOffersHandler so other actions rendering
+// offers (ex. offers for account) can use it.
 func buildOffersResponse(ctx context.Context, historyQ *history.Q, records []history.Offer) ([]horizon.Offer, error) {
 	ledgerCache := history.LedgerCache{}
 	for _, record := range records {
@@ -196,24 +127,4 @@ func buildOffersResponse(ctx context.Context, historyQ *history.Q, records []his
 	}
 
 	return offers, nil
-}
-
-func buildOffersPage(
-	ctx context.Context,
-	pageQuery db2.PageQuery,
-	offers []horizon.Offer,
-) hal.Page {
-	page := hal.Page{
-		Cursor: pageQuery.Cursor,
-		Order:  pageQuery.Order,
-		Limit:  pageQuery.Limit,
-	}
-
-	for _, offer := range offers {
-		page.Add(offer)
-	}
-
-	page.FullURL = FullURL(ctx)
-	page.PopulateLinks()
-	return page
 }
