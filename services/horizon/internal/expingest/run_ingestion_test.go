@@ -1,6 +1,7 @@
 package expingest
 
 import (
+	"database/sql"
 	"sort"
 	"testing"
 
@@ -38,12 +39,22 @@ func (m *mockDBQ) Begin() error {
 	return args.Error(0)
 }
 
+func (m *mockDBQ) BeginTx(opts *sql.TxOptions) error {
+	args := m.Called(opts)
+	return args.Error(0)
+}
+
 func (m *mockDBQ) Rollback() error {
 	args := m.Called()
 	return args.Error(0)
 }
 
 func (m *mockDBQ) GetLastLedgerExpIngest() (uint32, error) {
+	args := m.Called()
+	return args.Get(0).(uint32), args.Error(1)
+}
+
+func (m *mockDBQ) GetLastLedgerExpIngestNonBlocking() (uint32, error) {
 	args := m.Called()
 	return args.Get(0).(uint32), args.Error(1)
 }
@@ -66,6 +77,26 @@ func (m *mockDBQ) UpdateExpStateInvalid(invalid bool) error {
 func (m *mockDBQ) GetAllOffers() ([]history.Offer, error) {
 	args := m.Called()
 	return args.Get(0).([]history.Offer), args.Error(1)
+}
+
+func (m *mockDBQ) GetOffersByIDs(ids []int64) ([]history.Offer, error) {
+	args := m.Called(ids)
+	return args.Get(0).([]history.Offer), args.Error(1)
+}
+
+func (m *mockDBQ) SignersForAccounts(accounts []string) ([]history.AccountSigner, error) {
+	args := m.Called(accounts)
+	return args.Get(0).([]history.AccountSigner), args.Error(1)
+}
+
+func (m *mockDBQ) CountAccounts() (int, error) {
+	args := m.Called()
+	return args.Get(0).(int), args.Error(1)
+}
+
+func (m *mockDBQ) CountOffers() (int, error) {
+	args := m.Called()
+	return args.Get(0).(int), args.Error(1)
 }
 
 type mockIngestSession struct {
@@ -225,6 +256,19 @@ func (s *RunIngestionTestSuite) TestRunReturnsError() {
 	s.historyQ.On("Rollback").Return(nil).Once()
 	s.ingestSession.On("Resume", uint32(4)).Return(nil).Once()
 	s.system.retry = expectError(s.Assert(), "")
+}
+
+func (s *RunIngestionTestSuite) TestGetLatestSuccessfullyProcessedLedgerReturnsFalse() {
+	s.historyQ.On("Begin").Return(nil).Once()
+	s.historyQ.On("GetLastLedgerExpIngest").Return(uint32(0), nil).Once()
+	s.historyQ.On("GetExpIngestVersion").Return(CurrentVersion, nil).Once()
+	s.historyQ.On("UpdateLastLedgerExpIngest", uint32(0)).Return(nil).Once()
+	s.historyQ.On("UpdateExpStateInvalid", false).Return(nil).Once()
+	s.session.On("TruncateTables", history.ExperimentalIngestionTables).Return(nil).Once()
+	s.ingestSession.On("Run").Return(errors.New("run error")).Once()
+	s.ingestSession.On("GetLatestSuccessfullyProcessedLedger").Return(uint32(0), false).Once()
+	// No more calls: this makes sure the process does not continue
+	s.system.retry = expectError(s.Assert(), "run error")
 }
 
 func (s *RunIngestionTestSuite) TestOutdatedIngestVersion() {

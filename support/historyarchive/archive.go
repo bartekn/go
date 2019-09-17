@@ -48,6 +48,7 @@ type ArchiveBackend interface {
 }
 
 type ArchiveInterface interface {
+	GetURL() string
 	GetPathHAS(path string) (HistoryArchiveState, error)
 	PutPathHAS(path string, has HistoryArchiveState, opts *CommandOptions) error
 	BucketExists(bucket Hash) (bool, error)
@@ -85,7 +86,12 @@ type Archive struct {
 	invalidTxSets       int
 	invalidTxResultSets int
 
+	url     string
 	backend ArchiveBackend
+}
+
+func (a *Archive) GetURL() string {
+	return a.url
 }
 
 func (a *Archive) GetPathHAS(path string) (HistoryArchiveState, error) {
@@ -220,6 +226,7 @@ func (a *Archive) GetXdrStream(pth string) (*XdrStream, error) {
 
 func Connect(u string, opts ConnectOptions) (*Archive, error) {
 	arch := Archive{
+		url:                     u,
 		checkpointFiles:         make(map[string](map[uint32]bool)),
 		allBuckets:              make(map[Hash]bool),
 		referencedBuckets:       make(map[Hash]bool),

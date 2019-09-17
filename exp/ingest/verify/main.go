@@ -27,6 +27,12 @@ type StateError struct {
 	error
 }
 
+type StateVerifierInterface interface {
+	GetLedgerKeys(count int) ([]xdr.LedgerKey, error)
+	Write(entry xdr.LedgerEntry) error
+	Verify(countAll int) error
+}
+
 // StateVerifier verifies if ledger entries provided by Add method are the same
 // as in the checkpoint ledger entries provided by SingleLedgerStateReader.
 // The algorithm works in the following way:
@@ -210,3 +216,5 @@ func (v *StateVerifier) checkUnreadEntries() error {
 
 	return nil
 }
+
+var _ StateVerifierInterface = (*StateVerifier)(nil)

@@ -24,41 +24,38 @@ const verifyBatchSize = 50000
 // method instead of just updating this value!
 const stateVerifierExpectedIngestionVersion = 3
 
-// verifyState is called as a go routine from pipeline post hook every 64
-// ledgers. It checks if the state is correct. If another go routine is already
-// running it exists.
-func (s *System) verifyState() error {
-	s.stateVerificationMutex.Lock()
-	if s.stateVerificationRunning {
-		log.Warn("State verification is already running...")
-		s.stateVerificationMutex.Unlock()
-		return nil
-	}
-	s.stateVerificationRunning = true
-	s.stateVerificationMutex.Unlock()
+// stateVerifierFactoryInterface is needed only to be able to properly
+// test stateVerifier.
+type stateVerifierFactoryInterface interface {
+	buildStateVerifier(io.StateReader) verify.StateVerifierInterface
+}
 
+type stateVerifierFactory struct{}
+
+func (stateVerifierFactory) buildStateVerifier(stateReader io.StateReader) verify.StateVerifierInterface {
+	return &verify.StateVerifier{
+		StateReader:       stateReader,
+		TransformFunction: transformEntry,
+	}
+}
+
+type stateVerifier struct {
+	verifierFactory stateVerifierFactoryInterface
+	historyQ        dbQ
+	historyAdapter  adapters.HistoryArchiveAdapterInterface
+	sleepFn         func(time.Duration)
+}
+
+func (v *stateVerifier) verify() error {
 	if stateVerifierExpectedIngestionVersion != CurrentVersion {
-		log.Errorf(
+		return errors.Errorf(
 			"State verification expected version is %d but actual is: %d",
 			stateVerifierExpectedIngestionVersion,
 			CurrentVersion,
 		)
-		return nil
 	}
 
-	startTime := time.Now()
-	session := s.historySession.Clone()
-
-	defer func() {
-		log.WithField("duration", time.Since(startTime).Seconds()).Info("State verification finished")
-		session.Rollback()
-
-		s.stateVerificationMutex.Lock()
-		s.stateVerificationRunning = false
-		s.stateVerificationMutex.Unlock()
-	}()
-
-	err := session.BeginTx(&sql.TxOptions{
+	err := v.historyQ.BeginTx(&sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,
 	})
@@ -66,10 +63,10 @@ func (s *System) verifyState() error {
 		return errors.Wrap(err, "Error starting transaction")
 	}
 
-	historyQ := &history.Q{session}
+	defer v.historyQ.Rollback()
 
 	// Ensure the ledger is a checkpoint ledger
-	ledgerSequence, err := historyQ.GetLastLedgerExpIngestNonBlocking()
+	ledgerSequence, err := v.historyQ.GetLastLedgerExpIngestNonBlocking()
 	if err != nil {
 		return errors.Wrap(err, "Error running historyQ.GetLastLedgerExpIngestNonBlocking")
 	}
@@ -80,16 +77,13 @@ func (s *System) verifyState() error {
 	})
 
 	if !historyarchive.IsCheckpoint(ledgerSequence) {
-		localLog.Info("Current ledger is not a checkpoint ledger. Cancelling...")
-		return nil
+		return errors.Errorf("Ledger %d is not a checkpoint ledger.", ledgerSequence)
 	}
 
 	// Get root HAS to check if we're checking one of the latest ledgers or
 	// Horizon is catching up. It doesn't make sense to verify old ledgers as
 	// we want to check the latest state.
-	archive := s.session.GetArchive()
-	historyAdapter := adapters.MakeHistoryArchiveAdapter(archive)
-	historyLatestSequence, err := historyAdapter.GetLatestLedgerSequence()
+	historyLatestSequence, err := v.historyAdapter.GetLatestLedgerSequence()
 	if err != nil {
 		return errors.Wrap(err, "Error getting the latest ledger sequence")
 	}
@@ -99,34 +93,26 @@ func (s *System) verifyState() error {
 		return nil
 	}
 
-	localLog.Info("Starting state verification. Waiting 40 seconds for stellar-core to publish HAS...")
-
 	// Wait for stellar-core to publish HAS
-	time.Sleep(40 * time.Second)
+	localLog.Info("Starting state verification. Waiting 40 seconds for stellar-core to publish HAS...")
+	v.sleepFn(40 * time.Second)
 
+	startTime := time.Now()
 	localLog.Info("Creating state reader...")
 
-	stateReader, err := io.MakeSingleLedgerStateReader(
-		s.session.GetArchive(),
-		&io.MemoryTempSet{},
-		ledgerSequence,
-	)
+	stateReader, err := v.historyAdapter.GetState(ledgerSequence, &io.MemoryTempSet{})
 	if err != nil {
-		return errors.Wrap(err, "Error running io.MakeSingleLedgerStateReader")
+		return errors.Wrap(err, "Error running historyAdapter.GetState")
 	}
 	defer stateReader.Close()
 
-	verifier := &verify.StateVerifier{
-		StateReader:       stateReader,
-		TransformFunction: transformEntry,
-	}
-
+	verifier := v.verifierFactory.buildStateVerifier(stateReader)
 	total := 0
 	for {
 		var keys []xdr.LedgerKey
 		keys, err = verifier.GetLedgerKeys(verifyBatchSize)
 		if err != nil {
-			return errors.Wrap(err, "verifier.GetLedgerKeys")
+			return errors.Wrap(err, "verifier.GetLedgerKeys error")
 		}
 
 		if len(keys) == 0 {
@@ -146,12 +132,12 @@ func (s *System) verifyState() error {
 			}
 		}
 
-		err = addAccountsToStateVerifier(verifier, historyQ, accounts)
+		err = addAccountsToStateVerifier(verifier, v.historyQ, accounts)
 		if err != nil {
 			return errors.Wrap(err, "addAccountsToStateVerifier failed")
 		}
 
-		err = addOffersToStateVerifier(verifier, historyQ, offers)
+		err = addOffersToStateVerifier(verifier, v.historyQ, offers)
 		if err != nil {
 			return errors.Wrap(err, "addOffersToStateVerifier failed")
 		}
@@ -162,12 +148,12 @@ func (s *System) verifyState() error {
 
 	localLog.WithField("total", total).Info("Finished writing to StateVerifier")
 
-	countAccounts, err := historyQ.CountAccounts()
+	countAccounts, err := v.historyQ.CountAccounts()
 	if err != nil {
 		return errors.Wrap(err, "Error running historyQ.CountAccounts")
 	}
 
-	countOffers, err := historyQ.CountOffers()
+	countOffers, err := v.historyQ.CountOffers()
 	if err != nil {
 		return errors.Wrap(err, "Error running historyQ.CountOffers")
 	}
@@ -177,11 +163,51 @@ func (s *System) verifyState() error {
 		return errors.Wrap(err, "verifier.Verify failed")
 	}
 
-	localLog.Info("State correct")
+	localLog.
+		WithField("duration", time.Since(startTime).Seconds()).
+		Info("State correct")
 	return nil
 }
 
-func addAccountsToStateVerifier(verifier *verify.StateVerifier, q *history.Q, ids []string) error {
+// verifyState is called as a go routine from pipeline post hook every 64
+// ledgers. It checks if the state is correct. If another go routine is already
+// running it exists.
+func (s *System) verifyState() error {
+	s.stateVerificationMutex.Lock()
+	if s.stateVerificationRunning {
+		log.Warn("State verification is already running...")
+		s.stateVerificationMutex.Unlock()
+		return nil
+	}
+	s.stateVerificationRunning = true
+	s.stateVerificationMutex.Unlock()
+
+	defer func() {
+		s.stateVerificationMutex.Lock()
+		s.stateVerificationRunning = false
+		s.stateVerificationMutex.Unlock()
+	}()
+
+	historyQ := &history.Q{s.historySession.Clone()}
+	archive := s.session.GetArchive()
+	historyAdapter := adapters.MakeHistoryArchiveAdapter(archive)
+
+	verifier := stateVerifier{
+		verifierFactory: stateVerifierFactory{},
+		historyQ:        historyQ,
+		historyAdapter:  historyAdapter,
+		sleepFn:         time.Sleep,
+	}
+
+	err := verifier.verify()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func addAccountsToStateVerifier(verifier verify.StateVerifierInterface, q dbQ, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -251,7 +277,7 @@ func addAccountsToStateVerifier(verifier *verify.StateVerifier, q *history.Q, id
 	return nil
 }
 
-func addOffersToStateVerifier(verifier *verify.StateVerifier, q *history.Q, ids []int64) error {
+func addOffersToStateVerifier(verifier verify.StateVerifierInterface, q dbQ, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/stellar/go/exp/ingest/io"
 	"github.com/stellar/go/exp/orderbook"
 	"github.com/stellar/go/xdr"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestProcessOrderBookState(t *testing.T) {
@@ -344,4 +345,10 @@ func TestProcessOrderBookLedger(t *testing.T) {
 	if len(expectedOffers) != 0 {
 		t.Fatal("expected offers does not match offers in graph")
 	}
+}
+
+func TestOrderBookProcessorName(t *testing.T) {
+	graph := orderbook.NewOrderBookGraph()
+	processor := OrderbookProcessor{graph}
+	assert.Equal(t, "OrderbookProcessor", processor.Name())
 }

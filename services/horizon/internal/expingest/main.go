@@ -4,6 +4,7 @@
 package expingest
 
 import (
+	"database/sql"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -51,12 +52,18 @@ type Config struct {
 
 type dbQ interface {
 	Begin() error
+	BeginTx(*sql.TxOptions) error
 	Rollback() error
 	GetLastLedgerExpIngest() (uint32, error)
+	GetLastLedgerExpIngestNonBlocking() (uint32, error)
 	GetExpIngestVersion() (int, error)
 	UpdateLastLedgerExpIngest(uint32) error
 	UpdateExpStateInvalid(bool) error
 	GetAllOffers() ([]history.Offer, error)
+	GetOffersByIDs(ids []int64) ([]history.Offer, error)
+	SignersForAccounts(accounts []string) ([]history.AccountSigner, error)
+	CountAccounts() (int, error)
+	CountOffers() (int, error)
 }
 
 type dbSession interface {

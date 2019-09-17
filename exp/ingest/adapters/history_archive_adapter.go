@@ -9,6 +9,13 @@ import (
 	"github.com/stellar/go/xdr"
 )
 
+type HistoryArchiveAdapterInterface interface {
+	GetLatestLedgerSequence() (uint32, error)
+	BucketListHash(sequence uint32) (xdr.Hash, error)
+	GetState(sequence uint32, tempSet io.TempSet) (io.StateReader, error)
+	GetLedger(sequence uint32) (io.ArchiveLedgerReader, error)
+}
+
 // HistoryArchiveAdapter is an adapter for the historyarchive package to read from history archives
 type HistoryArchiveAdapter struct {
 	archive historyarchive.ArchiveInterface
@@ -70,3 +77,5 @@ func (haa *HistoryArchiveAdapter) GetState(sequence uint32, tempSet io.TempSet) 
 func (haa *HistoryArchiveAdapter) GetLedger(sequence uint32) (io.ArchiveLedgerReader, error) {
 	return nil, fmt.Errorf("not implemented yet")
 }
+
+var _ HistoryArchiveAdapterInterface = (*HistoryArchiveAdapter)(nil)

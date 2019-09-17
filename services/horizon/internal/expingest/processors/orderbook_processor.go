@@ -2,7 +2,6 @@ package processors
 
 import (
 	"context"
-	"fmt"
 	stdio "io"
 
 	"github.com/stellar/go/exp/ingest/io"
@@ -86,7 +85,7 @@ func (p *OrderbookProcessor) ProcessLedger(ctx context.Context, store *pipeline.
 }
 
 func (p *OrderbookProcessor) Name() string {
-	return fmt.Sprintf("OrderbookProcessor")
+	return "OrderbookProcessor"
 }
 
 func (p *OrderbookProcessor) Reset() {}
