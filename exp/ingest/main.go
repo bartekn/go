@@ -1,13 +1,16 @@
 package ingest
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 
 	"github.com/stellar/go/clients/stellarcore"
+	"github.com/stellar/go/exp/ingest/adapters"
 	"github.com/stellar/go/exp/ingest/io"
 	"github.com/stellar/go/exp/ingest/ledgerbackend"
 	"github.com/stellar/go/exp/ingest/pipeline"
+	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/support/historyarchive"
 	"github.com/stellar/go/xdr"
 )
@@ -37,6 +40,34 @@ type LiveSession struct {
 	StateReporter     StateReporter
 	LedgerPipeline    *pipeline.LedgerPipeline
 	LedgerReporter    LedgerReporter
+	// TempSet is a store used to hold temporary objects generated during
+	// state processing. If nil, defaults to io.MemoryTempSet.
+	TempSet io.TempSet
+
+	latestSuccessfullyProcessedLedger uint32
+}
+
+// RangeSession runs ingestion between `FromLedger` and `ToLedger` ledgers
+// (inclusive).
+// It does not update cursors in stellar-core.
+type RangeSession struct {
+	standardSession
+
+	// FromLedger indicates session starting ledger. If StatePipeline is not nil
+	// this must be a checkpoint ledger.
+	FromLedger uint32
+	// ToLedger at which ledger processing should stop. ToLedger will be the
+	// last processed ledger.
+	ToLedger uint32
+
+	Archive       historyarchive.ArchiveInterface
+	LedgerBackend ledgerbackend.LedgerBackend
+	// StatePipeline can be nil. In such case state is not processed and Archive
+	// can be nil as well.
+	StatePipeline  *pipeline.StatePipeline
+	StateReporter  StateReporter
+	LedgerPipeline *pipeline.LedgerPipeline
+	LedgerReporter LedgerReporter
 	// TempSet is a store used to hold temporary objects generated during
 	// state processing. If nil, defaults to io.MemoryTempSet.
 	TempSet io.TempSet
@@ -169,4 +200,106 @@ func (r reporterLedgerReader) GetUpgradeChanges() []io.Change {
 	}
 
 	return reader.GetUpgradeChanges()
+}
+
+// initState initialilizes the state using given arguments. Common code for
+// different sessions.
+func initState(
+	sequence uint32,
+	archive historyarchive.ArchiveInterface,
+	ledgerBackend ledgerbackend.LedgerBackend,
+	tempSet io.TempSet,
+	statePipeline *pipeline.StatePipeline,
+	stateReporter StateReporter,
+	shutdown chan bool,
+) error {
+	if !historyarchive.IsCheckpoint(sequence) {
+		return errors.New("Cannot initialize state for non-checkpoint ledger")
+	}
+
+	historyAdapter := adapters.MakeHistoryArchiveAdapter(archive)
+	ledgerAdapter := &adapters.LedgerBackendAdapter{Backend: ledgerBackend}
+
+	// Validate bucket list hash
+	err := validateBucketList(sequence, historyAdapter, ledgerAdapter)
+	if err != nil {
+		return errors.Wrap(err, "Error validating bucket list hash")
+	}
+
+	if tempSet == nil {
+		tempSet = &io.MemoryTempSet{}
+	}
+
+	stateReader, err := historyAdapter.GetState(sequence, tempSet)
+	if err != nil {
+		return errors.Wrap(err, "Error getting state from history archive")
+	}
+	if stateReporter != nil {
+		stateReporter.OnStartState(sequence)
+		stateReader = reporterStateReader{stateReader, stateReporter}
+	}
+
+	errChan := statePipeline.Process(stateReader)
+	select {
+	case err := <-errChan:
+		if err != nil {
+			if stateReporter != nil {
+				stateReporter.OnEndState(err, false)
+			}
+			return errors.Wrap(err, "State pipeline errored")
+		}
+	case <-shutdown:
+		if stateReporter != nil {
+			stateReporter.OnEndState(nil, true)
+		}
+		statePipeline.Shutdown()
+	}
+
+	if stateReporter != nil {
+		stateReporter.OnEndState(nil, false)
+	}
+	return nil
+}
+
+// validateBucketList validates if the bucket list hash in history archive
+// matches the one in corresponding ledger header in stellar-core backend.
+// This gives you full security if data in stellar-core backend can be trusted
+// (ex. you run it in your infrastructure).
+// The hashes of actual buckets of this HAS file are checked using
+// historyarchive.XdrStream.SetExpectedHash (this is done in
+// SingleLedgerStateReader).
+func validateBucketList(
+	ledgerSequence uint32,
+	historyAdapter *adapters.HistoryArchiveAdapter,
+	ledgerAdapter *adapters.LedgerBackendAdapter,
+) error {
+	historyBucketListHash, err := historyAdapter.BucketListHash(ledgerSequence)
+	if err != nil {
+		return errors.Wrap(err, "Error getting bucket list hash")
+	}
+
+	ledgerReader, err := ledgerAdapter.GetLedger(ledgerSequence)
+	if err != nil {
+		if err == io.ErrNotFound {
+			return fmt.Errorf(
+				"Cannot validate bucket hash list. Checkpoint ledger (%d) must exist in Stellar-Core database.",
+				ledgerSequence,
+			)
+		} else {
+			return errors.Wrap(err, "Error getting ledger")
+		}
+	}
+
+	ledgerHeader := ledgerReader.GetHeader()
+	ledgerBucketHashList := ledgerHeader.Header.BucketListHash
+
+	if !bytes.Equal(historyBucketListHash[:], ledgerBucketHashList[:]) {
+		return fmt.Errorf(
+			"Bucket list hash of history archive and ledger header does not match: %#x %#x",
+			historyBucketListHash,
+			ledgerBucketHashList,
+		)
+	}
+
+	return nil
 }

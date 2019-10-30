@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"context"
 	"time"
 
 	"github.com/stellar/go/exp/ingest/adapters"
@@ -10,11 +9,9 @@ import (
 	"github.com/stellar/go/support/historyarchive"
 )
 
-var _ Session = &LiveSession{}
+var _ Session = &RangeSession{}
 
-const defaultCoreCursorName = "EXPINGESTLIVESESSION"
-
-func (s *LiveSession) Run() error {
+func (s *RangeSession) Run() error {
 	s.standardSession.shutdown = make(chan bool)
 
 	err := s.validate()
@@ -25,36 +22,28 @@ func (s *LiveSession) Run() error {
 	s.setRunningState(true)
 	defer s.setRunningState(false)
 
-	historyAdapter := adapters.MakeHistoryArchiveAdapter(s.Archive)
-	currentLedger, err := historyAdapter.GetLatestLedgerSequence()
-	if err != nil {
-		return errors.Wrap(err, "Error getting the latest ledger sequence")
-	}
-
-	// Update cursor
-	err = s.updateCursor(currentLedger)
-	if err != nil {
-		return errors.Wrap(err, "Error setting cursor")
-	}
-
 	ledgerAdapter := &adapters.LedgerBackendAdapter{
 		Backend: s.LedgerBackend,
 	}
 
-	err = initState(
-		currentLedger,
-		s.Archive,
-		s.LedgerBackend,
-		s.TempSet,
-		s.StatePipeline,
-		s.StateReporter,
-		s.standardSession.shutdown,
-	)
-	if err != nil {
-		return errors.Wrap(err, "initState error")
-	}
+	currentLedger := s.FromLedger
 
-	s.latestSuccessfullyProcessedLedger = currentLedger
+	if s.StatePipeline != nil {
+		err = initState(
+			s.FromLedger,
+			s.Archive,
+			s.LedgerBackend,
+			s.TempSet,
+			s.StatePipeline,
+			s.StateReporter,
+			s.standardSession.shutdown,
+		)
+		if err != nil {
+			return errors.Wrap(err, "initState error")
+		}
+
+		s.latestSuccessfullyProcessedLedger = currentLedger
+	}
 
 	// Exit early if Shutdown() was called.
 	select {
@@ -72,26 +61,8 @@ func (s *LiveSession) Run() error {
 }
 
 // GetArchive returns the archive configured for the current session
-func (s *LiveSession) GetArchive() historyarchive.ArchiveInterface {
+func (s *RangeSession) GetArchive() historyarchive.ArchiveInterface {
 	return s.Archive
-}
-
-func (s *LiveSession) updateCursor(ledgerSequence uint32) error {
-	if s.StellarCoreClient == nil {
-		return nil
-	}
-
-	cursor := defaultCoreCursorName
-	if s.StellarCoreCursor != "" {
-		cursor = s.StellarCoreCursor
-	}
-
-	err := s.StellarCoreClient.SetCursor(context.Background(), cursor, int32(ledgerSequence))
-	if err != nil {
-		return errors.Wrap(err, "Setting stellar-core cursor failed")
-	}
-
-	return nil
 }
 
 // Resume resumes the session from `ledgerSequence`.
@@ -103,7 +74,7 @@ func (s *LiveSession) updateCursor(ledgerSequence uint32) error {
 // error while trying to process a ledger after application restart.
 // You should always check if the second returned value is equal `false` before
 // overwriting your local variable.
-func (s *LiveSession) Resume(ledgerSequence uint32) error {
+func (s *RangeSession) Resume(ledgerSequence uint32) error {
 	s.standardSession.shutdown = make(chan bool)
 
 	ledgerAdapter := &adapters.LedgerBackendAdapter{
@@ -113,7 +84,7 @@ func (s *LiveSession) Resume(ledgerSequence uint32) error {
 	return s.resume(ledgerSequence, ledgerAdapter)
 }
 
-func (s *LiveSession) resume(ledgerSequence uint32, ledgerAdapter *adapters.LedgerBackendAdapter) error {
+func (s *RangeSession) resume(ledgerSequence uint32, ledgerAdapter *adapters.LedgerBackendAdapter) error {
 	for {
 		ledgerReader, err := ledgerAdapter.GetLedger(ledgerSequence)
 		if err != nil {
@@ -171,11 +142,9 @@ func (s *LiveSession) resume(ledgerSequence uint32, ledgerAdapter *adapters.Ledg
 		}
 		s.latestSuccessfullyProcessedLedger = ledgerSequence
 
-		// Update cursor - this needs to be done after `latestSuccessfullyProcessedLedger`
-		// is updated as the cursor update shouldn't affect this value.
-		err = s.updateCursor(ledgerSequence)
-		if err != nil {
-			return errors.Wrap(err, "Error setting cursor")
+		// We reached the final ledger.
+		if ledgerSequence == s.ToLedger {
+			return nil
 		}
 
 		ledgerSequence++
@@ -189,21 +158,25 @@ func (s *LiveSession) resume(ledgerSequence uint32, ledgerAdapter *adapters.Ledg
 // to prevent situations where `GetLatestSuccessfullyProcessedLedger()` value is
 // not properly checked in a loop resulting in ingesting ledger 0+1=1.
 // Please check `Resume` godoc to understand possible implications.
-func (s *LiveSession) GetLatestSuccessfullyProcessedLedger() (ledgerSequence uint32, processed bool) {
+func (s *RangeSession) GetLatestSuccessfullyProcessedLedger() (ledgerSequence uint32, processed bool) {
 	if s.latestSuccessfullyProcessedLedger == 0 {
 		return 0, false
 	}
 	return s.latestSuccessfullyProcessedLedger, true
 }
 
-func (s *LiveSession) validate() error {
+func (s *RangeSession) validate() error {
 	switch {
-	case s.Archive == nil:
-		return errors.New("Archive not set")
+	case s.FromLedger == 0 || s.ToLedger == 0:
+		return errors.New("FromLedger and ToLedger must be set")
+	case s.FromLedger > s.ToLedger:
+		return errors.New("FromLedger must be less than of equal to ToLedger")
+	case s.StatePipeline != nil && !historyarchive.IsCheckpoint(s.FromLedger):
+		return errors.New("FromLedger must be a checkpoint ledger if StatePipeline is not nil")
 	case s.LedgerBackend == nil:
 		return errors.New("LedgerBackend not set")
-	case s.StatePipeline == nil:
-		return errors.New("State pipeline not set")
+	case s.StatePipeline != nil && s.Archive == nil:
+		return errors.New("Archive not set but required by StatePipeline")
 	case s.LedgerPipeline == nil:
 		return errors.New("Ledger pipeline not set")
 	}

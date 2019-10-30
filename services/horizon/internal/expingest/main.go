@@ -4,6 +4,7 @@
 package expingest
 
 import (
+	"context"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -12,7 +13,10 @@ import (
 	"github.com/stellar/go/exp/ingest"
 	"github.com/stellar/go/exp/ingest/io"
 	"github.com/stellar/go/exp/ingest/ledgerbackend"
+	"github.com/stellar/go/exp/ingest/pipeline"
+	"github.com/stellar/go/exp/ingest/verify"
 	"github.com/stellar/go/exp/orderbook"
+	supportPipeline "github.com/stellar/go/exp/support/pipeline"
 	"github.com/stellar/go/services/horizon/internal/db2/history"
 	"github.com/stellar/go/support/db"
 	"github.com/stellar/go/support/errors"
@@ -397,4 +401,138 @@ func createArchive(archiveURL string) (*historyarchive.Archive, error) {
 		archiveURL,
 		historyarchive.ConnectOptions{},
 	)
+}
+
+func VerifyRange(fromLedger, toLedger uint32, config Config) error {
+	log.WithFields(ilog.F{
+		"from": fromLedger,
+		"to":   toLedger,
+	}).Info("Verifying range")
+
+	archive, err := createArchive(config.HistoryArchiveURL)
+	if err != nil {
+		return errors.Wrap(err, "error creating history archive")
+	}
+
+	ledgerBackend, err := ledgerbackend.NewDatabaseBackendFromSession(config.CoreSession)
+	if err != nil {
+		return errors.Wrap(err, "error creating ledger backend")
+	}
+
+	historyQ := &history.Q{config.HistorySession}
+
+	session := &ingest.RangeSession{
+		FromLedger: fromLedger,
+		ToLedger:   toLedger,
+
+		Archive:        archive,
+		LedgerBackend:  ledgerBackend,
+		StatePipeline:  buildStatePipeline(historyQ, config.OrderBookGraph),
+		LedgerPipeline: buildLedgerPipeline(historyQ, config.OrderBookGraph),
+		StateReporter:  &LoggingStateReporter{Log: log, Interval: 100000},
+		LedgerReporter: &LoggingLedgerReporter{Log: log},
+
+		TempSet: config.TempSet,
+	}
+
+	pipelines := []supportPipeline.PipelineInterface{
+		session.StatePipeline, session.LedgerPipeline,
+	}
+
+	for _, pipeline := range pipelines {
+		pipeline.AddPreProcessingHook(func(ctx context.Context) (context.Context, error) {
+			return verifyPreProcessingHook(ctx, statePipeline, config.HistorySession)
+		})
+
+		pipeline.AddPostProcessingHook(func(ctx context.Context, err error) error {
+			return verifyPostProcessingHook(
+				ctx,
+				err,
+				statePipeline,
+				config.OrderBookGraph,
+				config.HistorySession,
+				toLedger,
+			)
+		})
+	}
+
+	return session.Run()
+}
+
+func verifyPreProcessingHook(
+	ctx context.Context,
+	pipelineType pType,
+	historySession *db.Session,
+) (context.Context, error) {
+	err := historySession.Begin()
+	if err != nil {
+		return nil, errors.Wrap(err, "Error starting a transaction")
+	}
+
+	ledgerSeq := pipeline.GetLedgerSequenceFromContext(ctx)
+
+	log.WithFields(ilog.F{
+		"ledger": ledgerSeq,
+		"type":   pipelineType,
+	}).Info("Processing ledger")
+
+	return ctx, nil
+}
+
+func verifyPostProcessingHook(
+	ctx context.Context,
+	err error,
+	pipelineType pType,
+	graph *orderbook.OrderBookGraph,
+	historySession *db.Session,
+	toLedger uint32,
+) error {
+	defer historySession.Rollback()
+	defer graph.Discard()
+
+	ledgerSeq := pipeline.GetLedgerSequenceFromContext(ctx)
+
+	if err != nil {
+		switch errors.Cause(err).(type) {
+		case verify.StateError:
+			markStateInvalid(historySession, err)
+		default:
+			log.
+				WithFields(ilog.F{
+					"ledger": ledgerSeq,
+					"type":   pipelineType,
+					"err":    err,
+				}).
+				Error("Error processing ledger")
+		}
+		return err
+	}
+
+	if err = historySession.Commit(); err != nil {
+		return errors.Wrap(err, "Error commiting db transaction")
+	}
+
+	err = graph.Apply(ledgerSeq)
+	if err != nil {
+		return errors.Wrap(err, "Error applying order book changes")
+	}
+
+	log.WithFields(ilog.F{"ledger": ledgerSeq, "type": pipelineType}).
+		Info("Processed ledger")
+
+	// If last ledger verify state
+	if ledgerSeq == toLedger {
+		log.Info("TODO: Verifying state")
+		// err := system.verifyState()
+		// if err != nil {
+		// 	switch errors.Cause(err).(type) {
+		// 	case verify.StateError:
+		// 		markStateInvalid(historySession, err)
+		// 	default:
+		// 		log.WithField("err", err).Error("State verification errored")
+		// 	}
+		// }
+	}
+
+	return nil
 }
