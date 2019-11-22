@@ -56,6 +56,7 @@ func (q *Q) TransactionsByIDs(ids ...int64) (map[int64]Transaction, error) {
 func (q *Q) Transactions() *TransactionsQ {
 	return &TransactionsQ{
 		parent:        q,
+		txIdCol:       "ht.id",
 		sql:           selectTransaction,
 		includeFailed: false,
 	}
@@ -72,6 +73,9 @@ func (q *TransactionsQ) ForAccount(aid string) *TransactionsQ {
 	q.sql = q.sql.
 		Join("history_transaction_participants htp ON htp.history_transaction_id = ht.id").
 		Where("htp.history_account_id = ?", account.ID)
+
+	// in order to use history_transaction_participants.hist_tx_p_id index
+	q.txIdCol = "htp.history_transaction_id"
 
 	return q
 }
@@ -108,7 +112,7 @@ func (q *TransactionsQ) Page(page db2.PageQuery) *TransactionsQ {
 		return q
 	}
 
-	q.sql, q.Err = page.ApplyTo(q.sql, "ht.id")
+	q.sql, q.Err = page.ApplyTo(q.sql, q.txIdCol)
 	return q
 }
 

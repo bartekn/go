@@ -525,6 +525,7 @@ type TransactionsQ struct {
 	Err           error
 	parent        *Q
 	sql           sq.SelectBuilder
+	txIdCol       string
 	includeFailed bool
 }
 

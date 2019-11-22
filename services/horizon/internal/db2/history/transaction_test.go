@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/stellar/go/services/horizon/internal/db2"
 	"github.com/stellar/go/services/horizon/internal/test"
 )
 
@@ -23,6 +24,23 @@ func TestTransactionQueries(t *testing.T) {
 	tt.Assert.Equal(err, sql.ErrNoRows)
 }
 
+func TestTransactionForLedger(t *testing.T) {
+	tt := test.Start(t).Scenario("base")
+	defer tt.Finish()
+	q := &Q{tt.HorizonSession()}
+
+	query := q.Transactions().
+		ForLedger(1).
+		Page(db2.MustPageQuery("9223372036854775807", true, "desc", 200))
+
+	sql, _, err := query.sql.ToSql()
+	tt.Assert.NoError(err)
+	// Note: brackets around `(ht.successful = true OR ht.successful IS NULL)` are critical!
+	// Note: Correct index used if ht.id column is everywhere
+	tt.Assert.Contains(sql, "WHERE ht.id >= ? AND ht.id < ? AND ht.id < ?")
+
+}
+
 // TestTransactionSuccessfulOnly tests if default query returns successful
 // transactions only.
 // If it's not enclosed in brackets, it may return incorrect result when mixed
@@ -35,7 +53,8 @@ func TestTransactionSuccessfulOnly(t *testing.T) {
 
 	q := &Q{tt.HorizonSession()}
 	query := q.Transactions().
-		ForAccount("GA5WBPYA5Y4WAEHXWR2UKO2UO4BUGHUQ74EUPKON2QHV4WRHOIRNKKH2")
+		ForAccount("GA5WBPYA5Y4WAEHXWR2UKO2UO4BUGHUQ74EUPKON2QHV4WRHOIRNKKH2").
+		Page(db2.MustPageQuery("9223372036854775807", true, "desc", 200))
 
 	err := query.Select(&transactions)
 	tt.Assert.NoError(err)
@@ -49,7 +68,8 @@ func TestTransactionSuccessfulOnly(t *testing.T) {
 	sql, _, err := query.sql.ToSql()
 	tt.Assert.NoError(err)
 	// Note: brackets around `(ht.successful = true OR ht.successful IS NULL)` are critical!
-	tt.Assert.Contains(sql, "WHERE htp.history_account_id = ? AND (ht.successful = true OR ht.successful IS NULL)")
+	// Note: Correct index used if htp.history_transaction_id column is there
+	tt.Assert.Contains(sql, "WHERE htp.history_account_id = ? AND htp.history_transaction_id < ? AND (ht.successful = true OR ht.successful IS NULL)")
 }
 
 // TestTransactionIncludeFailed tests `IncludeFailed` method.
