@@ -12,6 +12,7 @@ import (
 	"github.com/stellar/go/services/horizon/internal/db2"
 	"github.com/stellar/go/services/horizon/internal/db2/history"
 	"github.com/stellar/go/services/horizon/internal/expingest/processors"
+	"github.com/stellar/go/support/db"
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/support/historyarchive"
 	logpkg "github.com/stellar/go/support/log"
@@ -30,9 +31,9 @@ const assetStatsBatchSize = 500
 const stateVerifierExpectedIngestionVersion = 9
 
 // verifyState is called as a go routine from pipeline post hook every 64
-// ledgers. It checks if the state is correct. If another go routine is already
-// running it exists.
-func (s *System) verifyState(graphOffers map[xdr.Int64]xdr.OfferEntry) error {
+// ledgers. It runs global verifyState inside. If another go routine is already
+// running it exists. It exits if ledger sequence is old (ex. catching up).
+func (s *System) verifyState(graphOffersMap map[xdr.Int64]xdr.OfferEntry) error {
 	s.stateVerificationMutex.Lock()
 	if s.stateVerificationRunning {
 		log.Warn("State verification is already running...")
@@ -42,6 +43,62 @@ func (s *System) verifyState(graphOffers map[xdr.Int64]xdr.OfferEntry) error {
 	s.stateVerificationRunning = true
 	s.stateVerificationMutex.Unlock()
 
+	defer func() {
+		s.stateVerificationMutex.Lock()
+		s.stateVerificationRunning = false
+		s.stateVerificationMutex.Unlock()
+	}()
+
+	// Get root HAS to check if we're checking one of the latest ledgers or
+	// Horizon is catching up. It doesn't make sense to verify old ledgers as
+	// we want to check the latest state.
+	historyAdapter := adapters.MakeHistoryArchiveAdapter(s.session.GetArchive())
+	historyLatestSequence, err := historyAdapter.GetLatestLedgerSequence()
+	if err != nil {
+		return errors.Wrap(err, "Error getting the latest ledger sequence")
+	}
+
+	// Clone session because it's used by System in LiveSession
+	historySession := s.historySession.Clone()
+	historyQ := &history.Q{historySession}
+	ledgerSequence, err := historyQ.GetLastLedgerExpIngestNonBlocking()
+	if err != nil {
+		return errors.Wrap(err, "Error running historyQ.GetLastLedgerExpIngestNonBlocking")
+	}
+
+	localLog := log.WithFields(logpkg.F{
+		"subservice": "state_verify",
+		"ledger":     ledgerSequence,
+	})
+
+	if ledgerSequence < historyLatestSequence {
+		localLog.Info("Current ledger is old. Cancelling...")
+		return nil
+	}
+
+	if !historyarchive.IsCheckpoint(ledgerSequence) {
+		localLog.Info("Current ledger is not a checkpoint ledger. Cancelling...")
+		return nil
+	}
+
+	localLog.Info("Starting state verification. Waiting 40 seconds for stellar-core to publish HAS...")
+
+	// Wait for stellar-core to publish HAS
+	time.Sleep(40 * time.Second)
+
+	return verifyState(
+		historySession,
+		s.session.GetArchive(),
+		graphOffersMap,
+	)
+}
+
+// verifyState is checks if the state is correct.
+func verifyState(
+	session *db.Session,
+	archive historyarchive.ArchiveInterface,
+	graphOffersMap map[xdr.Int64]xdr.OfferEntry,
+) error {
 	if stateVerifierExpectedIngestionVersion != CurrentVersion {
 		log.Errorf(
 			"State verification expected version is %d but actual is: %d",
@@ -52,15 +109,10 @@ func (s *System) verifyState(graphOffers map[xdr.Int64]xdr.OfferEntry) error {
 	}
 
 	startTime := time.Now()
-	session := s.historySession.Clone()
 
 	defer func() {
 		log.WithField("duration", time.Since(startTime).Seconds()).Info("State verification finished")
 		session.Rollback()
-
-		s.stateVerificationMutex.Lock()
-		s.stateVerificationRunning = false
-		s.stateVerificationMutex.Unlock()
 	}()
 
 	err := session.BeginTx(&sql.TxOptions{
@@ -84,38 +136,20 @@ func (s *System) verifyState(graphOffers map[xdr.Int64]xdr.OfferEntry) error {
 		"ledger":     ledgerSequence,
 	})
 
+	localLog.Info("Verifying state...")
+
 	if !historyarchive.IsCheckpoint(ledgerSequence) {
 		localLog.Info("Current ledger is not a checkpoint ledger. Cancelling...")
 		return nil
 	}
 
-	// Get root HAS to check if we're checking one of the latest ledgers or
-	// Horizon is catching up. It doesn't make sense to verify old ledgers as
-	// we want to check the latest state.
-	archive := s.session.GetArchive()
-	historyAdapter := adapters.MakeHistoryArchiveAdapter(archive)
-	historyLatestSequence, err := historyAdapter.GetLatestLedgerSequence()
-	if err != nil {
-		return errors.Wrap(err, "Error getting the latest ledger sequence")
-	}
-
-	if ledgerSequence < historyLatestSequence {
-		localLog.Info("Current ledger is old. Cancelling...")
-		return nil
-	}
-
-	localLog.Info("Starting state verification. Waiting 40 seconds for stellar-core to publish HAS...")
-
-	// Wait for stellar-core to publish HAS
-	time.Sleep(40 * time.Second)
-
 	localLog.Info("Creating state reader...")
 
 	stateReader, err := io.MakeSingleLedgerStateReader(
-		s.session.GetArchive(),
+		archive,
 		&io.MemoryTempSet{},
 		ledgerSequence,
-		s.maxStreamRetries,
+		5,
 	)
 	if err != nil {
 		return errors.Wrap(err, "Error running io.MakeSingleLedgerStateReader")
@@ -169,7 +203,7 @@ func (s *System) verifyState(graphOffers map[xdr.Int64]xdr.OfferEntry) error {
 			return errors.Wrap(err, "addDataToStateVerifier failed")
 		}
 
-		err = addOffersToStateVerifier(verifier, historyQ, offers, graphOffers)
+		err = addOffersToStateVerifier(verifier, historyQ, offers, graphOffersMap)
 		if err != nil {
 			return errors.Wrap(err, "addOffersToStateVerifier failed")
 		}
@@ -185,11 +219,11 @@ func (s *System) verifyState(graphOffers map[xdr.Int64]xdr.OfferEntry) error {
 
 	localLog.WithField("total", total).Info("Finished writing to StateVerifier")
 
-	if len(graphOffers) != 0 {
+	if len(graphOffersMap) != 0 {
 		return verify.NewStateError(
 			fmt.Errorf(
 				"orderbook graph contains %v offers missing from HAS",
-				len(graphOffers),
+				len(graphOffersMap),
 			),
 		)
 	}

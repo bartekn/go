@@ -5,6 +5,7 @@ import (
 
 	"github.com/stellar/go/exp/ingest/adapters"
 	"github.com/stellar/go/exp/ingest/io"
+	"github.com/stellar/go/exp/support/pipeline"
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/support/historyarchive"
 )
@@ -125,6 +126,12 @@ func (s *RangeSession) resume(ledgerSequence uint32, ledgerAdapter *adapters.Led
 		select {
 		case err2 := <-errChan:
 			if err2 != nil {
+				// Return with no errors if pipeline shutdown
+				if err2 == pipeline.ErrShutdown {
+					s.LedgerReporter.OnEndLedger(nil, true)
+					return nil
+				}
+
 				if s.LedgerReporter != nil {
 					s.LedgerReporter.OnEndLedger(err2, false)
 				}

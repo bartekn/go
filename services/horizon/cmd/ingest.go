@@ -40,7 +40,7 @@ var ingestVerifyCmdOpts = []*support.ConfigOption{
 }
 
 var ingestVerifyCmd = &cobra.Command{
-	Use:   "verify",
+	Use:   "verify-state",
 	Short: "runs ingestion pipeline within a range",
 	Long:  "runs ingestion pipeline between X and Y sequence number (inclusive)",
 	Run: func(cmd *cobra.Command, args []string) {
@@ -61,8 +61,8 @@ var ingestVerifyCmd = &cobra.Command{
 			log.Fatalf("cannot open Horizon DB: %v", err)
 		}
 
-		if !historyarchive.IsCheckpoint(ingestVerifyTo) {
-			log.Fatalf("ToLedger must be a checkpoint ledger")
+		if !historyarchive.IsCheckpoint(ingestVerifyFrom) || !historyarchive.IsCheckpoint(ingestVerifyTo) {
+			log.Fatal("`from` and `to` must be checkpoint ledgers")
 		}
 
 		ingestConfig := expingest.Config{
@@ -72,10 +72,12 @@ var ingestVerifyCmd = &cobra.Command{
 			OrderBookGraph:    orderbook.NewOrderBookGraph(),
 		}
 
-		err = expingest.VerifyRange(ingestVerifyFrom, ingestVerifyTo, ingestConfig)
+		err = expingest.VerifyStateRange(ingestVerifyFrom, ingestVerifyTo, ingestConfig)
 		if err != nil {
 			log.Fatal(err)
 		}
+
+		log.Info("Range successfully verified!")
 	},
 }
 

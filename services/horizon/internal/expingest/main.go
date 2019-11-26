@@ -14,10 +14,10 @@ import (
 	"github.com/stellar/go/exp/ingest/io"
 	"github.com/stellar/go/exp/ingest/ledgerbackend"
 	"github.com/stellar/go/exp/ingest/pipeline"
-	"github.com/stellar/go/exp/ingest/verify"
 	"github.com/stellar/go/exp/orderbook"
 	supportPipeline "github.com/stellar/go/exp/support/pipeline"
 	"github.com/stellar/go/services/horizon/internal/db2/history"
+	"github.com/stellar/go/services/horizon/internal/expingest/processors"
 	"github.com/stellar/go/support/db"
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/support/historyarchive"
@@ -411,11 +411,21 @@ func createArchive(archiveURL string) (*historyarchive.Archive, error) {
 	)
 }
 
-func VerifyRange(fromLedger, toLedger uint32, config Config) error {
+func VerifyStateRange(fromLedger, toLedger uint32, config Config) error {
 	log.WithFields(logpkg.F{
 		"from": fromLedger,
 		"to":   toLedger,
 	}).Info("Verifying range")
+
+	historyQ := &history.Q{config.HistorySession}
+	ledgerSequence, err := historyQ.GetLastLedgerExpIngestNonBlocking()
+	if err != nil {
+		return errors.Wrap(err, "error getting last ledger sequence")
+	}
+
+	if ledgerSequence != 0 {
+		return errors.New("last ledger sequence set, run verify-state on empty DB")
+	}
 
 	archive, err := createArchive(config.HistoryArchiveURL)
 	if err != nil {
@@ -426,8 +436,6 @@ func VerifyRange(fromLedger, toLedger uint32, config Config) error {
 	if err != nil {
 		return errors.Wrap(err, "error creating ledger backend")
 	}
-
-	historyQ := &history.Q{config.HistorySession}
 
 	session := &ingest.RangeSession{
 		FromLedger: fromLedger,
@@ -440,7 +448,8 @@ func VerifyRange(fromLedger, toLedger uint32, config Config) error {
 		StateReporter:  &LoggingStateReporter{Log: log, Interval: 100000},
 		LedgerReporter: &LoggingLedgerReporter{Log: log},
 
-		TempSet: config.TempSet,
+		TempSet:          config.TempSet,
+		MaxStreamRetries: 5,
 	}
 
 	pipelines := []supportPipeline.PipelineInterface{
@@ -449,14 +458,14 @@ func VerifyRange(fromLedger, toLedger uint32, config Config) error {
 
 	for _, pipeline := range pipelines {
 		pipeline.AddPreProcessingHook(func(ctx context.Context) (context.Context, error) {
-			return verifyPreProcessingHook(ctx, statePipeline, config.HistorySession)
+			return verifyPreProcessingHook(ctx, config.HistorySession)
 		})
 
 		pipeline.AddPostProcessingHook(func(ctx context.Context, err error) error {
 			return verifyPostProcessingHook(
 				ctx,
 				err,
-				statePipeline,
+				archive,
 				config.OrderBookGraph,
 				config.HistorySession,
 				toLedger,
@@ -464,12 +473,21 @@ func VerifyRange(fromLedger, toLedger uint32, config Config) error {
 		})
 	}
 
-	return session.Run()
+	err = session.Run()
+	if err != nil {
+		return err
+	}
+
+	err = verifyState(config.HistorySession, archive, config.OrderBookGraph.OffersMap())
+	if err != nil {
+		return errors.Wrap(err, "State verification error")
+	}
+
+	return nil
 }
 
 func verifyPreProcessingHook(
 	ctx context.Context,
-	pipelineType pType,
 	historySession *db.Session,
 ) (context.Context, error) {
 	err := historySession.Begin()
@@ -478,19 +496,17 @@ func verifyPreProcessingHook(
 	}
 
 	ledgerSeq := pipeline.GetLedgerSequenceFromContext(ctx)
+	log.WithField("ledger", ledgerSeq).Info("Processing ledger")
 
-	log.WithFields(logpkg.F{
-		"ledger": ledgerSeq,
-		"type":   pipelineType,
-	}).Info("Processing ledger")
-
+	// Run DB processors
+	ctx = context.WithValue(ctx, processors.IngestUpdateDatabase, true)
 	return ctx, nil
 }
 
 func verifyPostProcessingHook(
 	ctx context.Context,
 	err error,
-	pipelineType pType,
+	archive historyarchive.ArchiveInterface,
 	graph *orderbook.OrderBookGraph,
 	historySession *db.Session,
 	toLedger uint32,
@@ -498,22 +514,15 @@ func verifyPostProcessingHook(
 	defer historySession.Rollback()
 	defer graph.Discard()
 
+	if err != nil {
+		return errors.Wrap(err, "Pipeline processing error")
+	}
+
 	ledgerSeq := pipeline.GetLedgerSequenceFromContext(ctx)
 
-	if err != nil {
-		switch errors.Cause(err).(type) {
-		case verify.StateError:
-			markStateInvalid(historySession, err)
-		default:
-			log.
-				WithFields(logpkg.F{
-					"ledger": ledgerSeq,
-					"type":   pipelineType,
-					"err":    err,
-				}).
-				Error("Error processing ledger")
-		}
-		return err
+	historyQ := &history.Q{historySession}
+	if err = historyQ.UpdateLastLedgerExpIngest(ledgerSeq); err != nil {
+		return errors.Wrap(err, "Error updating last ingested ledger")
 	}
 
 	if err = historySession.Commit(); err != nil {
@@ -525,22 +534,6 @@ func verifyPostProcessingHook(
 		return errors.Wrap(err, "Error applying order book changes")
 	}
 
-	log.WithFields(logpkg.F{"ledger": ledgerSeq, "type": pipelineType}).
-		Info("Processed ledger")
-
-	// If last ledger verify state
-	if ledgerSeq == toLedger {
-		log.Info("TODO: Verifying state")
-		// err := system.verifyState()
-		// if err != nil {
-		// 	switch errors.Cause(err).(type) {
-		// 	case verify.StateError:
-		// 		markStateInvalid(historySession, err)
-		// 	default:
-		// 		log.WithField("err", err).Error("State verification errored")
-		// 	}
-		// }
-	}
-
+	log.WithField("ledger", ledgerSeq).Info("Processed ledger")
 	return nil
 }

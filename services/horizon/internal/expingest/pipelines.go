@@ -276,13 +276,8 @@ func postProcessingHook(
 		pipelineType == ledgerPipeline && // it's a ledger pipeline...
 		isMaster && // it's a master ingestion node (to verify on a single node only)...
 		historyarchive.IsCheckpoint(ledgerSeq) { // it's a checkpoint ledger.
-		go func(offerEntries []xdr.OfferEntry) {
-			graphOffers := map[xdr.Int64]xdr.OfferEntry{}
-			for _, entry := range offerEntries {
-				graphOffers[entry.OfferId] = entry
-			}
-
-			err := system.verifyState(graphOffers)
+		go func(graphOffersMap map[xdr.Int64]xdr.OfferEntry) {
+			err := system.verifyState(graphOffersMap)
 			if err != nil {
 				errorCount := system.incrementStateVerificationErrors()
 				switch errors.Cause(err).(type) {
@@ -298,7 +293,7 @@ func postProcessingHook(
 			} else {
 				system.resetStateVerificationErrors()
 			}
-		}(graph.Offers())
+		}(graph.OffersMap())
 	}
 
 	log.WithFields(logpkg.F{"ledger": ledgerSeq, "type": pipelineType}).Info("Processed ledger")

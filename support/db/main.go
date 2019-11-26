@@ -146,7 +146,7 @@ func Open(dialect, dsn string) (*Session, error) {
 		return nil, errors.Wrap(err, "connect failed")
 	}
 
-	return &Session{DB: db}, nil
+	return &Session{DB: db, Ctx: context.Background()}, nil
 }
 
 // Wrap wraps a bare *sql.DB (from the database/sql stdlib package) in a
