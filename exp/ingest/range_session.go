@@ -37,6 +37,7 @@ func (s *RangeSession) Run() error {
 			s.StatePipeline,
 			s.StateReporter,
 			s.standardSession.shutdown,
+			s.MaxStreamRetries,
 		)
 		if err != nil {
 			return errors.Wrap(err, "initState error")

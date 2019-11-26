@@ -15,7 +15,7 @@ import (
 	"github.com/stellar/go/support/db"
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/support/historyarchive"
-	ilog "github.com/stellar/go/support/log"
+	logpkg "github.com/stellar/go/support/log"
 	"github.com/stellar/go/xdr"
 )
 
@@ -183,7 +183,7 @@ func preProcessingHook(
 		historySession.Rollback()
 	}
 
-	log.WithFields(ilog.F{
+	log.WithFields(logpkg.F{
 		"ledger":            ledgerSeq,
 		"type":              pipelineType,
 		"updating_database": updateDatabase,
@@ -208,12 +208,16 @@ func postProcessingHook(
 	ledgerSeq := pipeline.GetLedgerSequenceFromContext(ctx)
 
 	if err != nil {
+		if err == supportPipeline.ErrShutdown {
+			return nil
+		}
+
 		switch errors.Cause(err).(type) {
 		case verify.StateError:
 			markStateInvalid(historySession, err)
 		default:
 			log.
-				WithFields(ilog.F{
+				WithFields(logpkg.F{
 					"ledger": ledgerSeq,
 					"type":   pipelineType,
 					"err":    err,
@@ -297,7 +301,7 @@ func postProcessingHook(
 		}(graph.Offers())
 	}
 
-	log.WithFields(ilog.F{"ledger": ledgerSeq, "type": pipelineType}).Info("Processed ledger")
+	log.WithFields(logpkg.F{"ledger": ledgerSeq, "type": pipelineType}).Info("Processed ledger")
 	return nil
 }
 

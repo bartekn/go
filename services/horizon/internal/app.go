@@ -84,9 +84,9 @@ func (a *App) Serve() {
 		Timeout: 10 * time.Second,
 
 		Server: &http.Server{
-			Addr:              addr,
-			Handler:           a.web.router,
-			ReadHeaderTimeout: 5 * time.Second,
+			Addr:        addr,
+			Handler:     a.web.router,
+			ReadTimeout: 5 * time.Second,
 		},
 
 		ShutdownInitiated: func() {
@@ -99,8 +99,16 @@ func (a *App) Serve() {
 
 	go a.run()
 
+	// WaitGroup for all go routines. Makes sure that DB is closed when
+	// all services gracefully shutdown.
+	var wg sync.WaitGroup
+
 	if a.expingester != nil {
-		go a.expingester.Run()
+		wg.Add(1)
+		go func() {
+			a.expingester.Run()
+			wg.Done()
+		}()
 	}
 
 	var err error
@@ -114,6 +122,7 @@ func (a *App) Serve() {
 		log.Fatal(err)
 	}
 
+	wg.Wait()
 	a.CloseDB()
 
 	log.Info("stopped")
@@ -211,8 +220,8 @@ func (a *App) UpdateLedgerState() {
 	ledger.SetState(next)
 }
 
-// UpdateOperationFeeStatsState triggers a refresh of several operation fee metrics.
-func (a *App) UpdateOperationFeeStatsState() {
+// UpdateFeeStatsState triggers a refresh of several operation fee metrics.
+func (a *App) UpdateFeeStatsState() {
 	var (
 		next          operationfeestats.State
 		latest        history.LatestLedger
@@ -245,7 +254,7 @@ func (a *App) UpdateOperationFeeStatsState() {
 	next.LastBaseFee = int64(latest.BaseFee)
 	next.LastLedger = int64(latest.Sequence)
 
-	err = a.HistoryQ().OperationFeeStats(latest.Sequence, &feeStats)
+	err = a.HistoryQ().FeeStats(latest.Sequence, &feeStats)
 	if err != nil {
 		logErr(err, "failed to load operation fee stats")
 		return
@@ -355,7 +364,7 @@ func (a *App) Tick() {
 	// update ledger state, operation fee state, and stellar-core info in parallel
 	wg.Add(3)
 	go func() { a.UpdateLedgerState(); wg.Done() }()
-	go func() { a.UpdateOperationFeeStatsState(); wg.Done() }()
+	go func() { a.UpdateFeeStatsState(); wg.Done() }()
 	go func() { a.UpdateStellarCoreInfo(); wg.Done() }()
 	wg.Wait()
 

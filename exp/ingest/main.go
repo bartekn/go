@@ -43,6 +43,10 @@ type LiveSession struct {
 	// TempSet is a store used to hold temporary objects generated during
 	// state processing. If nil, defaults to io.MemoryTempSet.
 	TempSet io.TempSet
+	// MaxStreamRetries determines how many times the reader will retry when encountering
+	// errors while streaming xdr bucket entries from the history archive.
+	// Default MaxStreamRetries value (0) means that there should be no retry attempts
+	MaxStreamRetries int
 
 	latestSuccessfullyProcessedLedger uint32
 }
@@ -71,6 +75,10 @@ type RangeSession struct {
 	// TempSet is a store used to hold temporary objects generated during
 	// state processing. If nil, defaults to io.MemoryTempSet.
 	TempSet io.TempSet
+	// MaxStreamRetries determines how many times the reader will retry when encountering
+	// errors while streaming xdr bucket entries from the history archive.
+	// Default MaxStreamRetries value (0) means that there should be no retry attempts
+	MaxStreamRetries int
 
 	latestSuccessfullyProcessedLedger uint32
 }
@@ -88,6 +96,10 @@ type SingleLedgerSession struct {
 	// TempSet is a store used to hold temporary objects generated during
 	// state processing. If nil, defaults to io.MemoryTempSet.
 	TempSet io.TempSet
+	// MaxStreamRetries determines how many times the reader will retry when encountering
+	// errors while streaming xdr bucket entries from the history archive.
+	// Set MaxStreamRetries to 0 if there should be no retry attempts
+	MaxStreamRetries int
 }
 
 // Session is an implementation of a ingesting scenario. Some useful sessions
@@ -212,6 +224,7 @@ func initState(
 	statePipeline *pipeline.StatePipeline,
 	stateReporter StateReporter,
 	shutdown chan bool,
+	maxStreamRetries int,
 ) error {
 	if !historyarchive.IsCheckpoint(sequence) {
 		return errors.New("Cannot initialize state for non-checkpoint ledger")
@@ -230,7 +243,7 @@ func initState(
 		tempSet = &io.MemoryTempSet{}
 	}
 
-	stateReader, err := historyAdapter.GetState(sequence, tempSet)
+	stateReader, err := historyAdapter.GetState(sequence, tempSet, maxStreamRetries)
 	if err != nil {
 		return errors.Wrap(err, "Error getting state from history archive")
 	}
