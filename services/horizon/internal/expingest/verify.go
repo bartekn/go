@@ -32,7 +32,7 @@ const stateVerifierExpectedIngestionVersion = 9
 
 // verifyState is called as a go routine from pipeline post hook every 64
 // ledgers. It runs global verifyState inside. If another go routine is already
-// running it exists. It exits if ledger sequence is old (ex. catching up).
+// running it exits. It exits if ledger sequence is old (ex. catching up).
 func (s *System) verifyState(graphOffersMap map[xdr.Int64]xdr.OfferEntry) error {
 	s.stateVerificationMutex.Lock()
 	if s.stateVerificationRunning {
