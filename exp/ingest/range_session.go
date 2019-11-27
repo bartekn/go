@@ -87,6 +87,14 @@ func (s *RangeSession) Resume(ledgerSequence uint32) error {
 }
 
 func (s *RangeSession) resume(ledgerSequence uint32, ledgerAdapter *adapters.LedgerBackendAdapter) error {
+	if ledgerSequence < s.FromLedger {
+		return errors.New("Trying to resume from ledger before range start")
+	}
+
+	if ledgerSequence > s.ToLedger {
+		return nil
+	}
+
 	for {
 		ledgerReader, err := ledgerAdapter.GetLedger(ledgerSequence)
 		if err != nil {
