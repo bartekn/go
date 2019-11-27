@@ -474,12 +474,12 @@ func VerifyPipelineRange(fromLedger, toLedger uint32, config Config, runVerifySt
 		log.Info("Starting from empty state")
 		err = session.Run()
 	} else {
-		err := loadOrderBookGraphFromDB(historyQ, config.OrderBookGraph, ledgerSequence)
+		err = loadOrderBookGraphFromDB(historyQ, config.OrderBookGraph, ledgerSequence)
 		if err != nil {
 			return err
 		}
 		log.Infof("Resuming from ledger %d", ledgerSequence+1)
-		err = session.Resume(ledgerSequence + 1)
+		err = session.Resume(ledgerSequence)
 	}
 	if err != nil {
 		return err
