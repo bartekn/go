@@ -411,21 +411,13 @@ func createArchive(archiveURL string) (*historyarchive.Archive, error) {
 	)
 }
 
-func VerifyStateRange(fromLedger, toLedger uint32, config Config) error {
+func VerifyPipelineRange(fromLedger, toLedger uint32, config Config, runVerifyState bool) error {
 	log.WithFields(logpkg.F{
 		"from": fromLedger,
 		"to":   toLedger,
 	}).Info("Verifying range")
 
 	historyQ := &history.Q{config.HistorySession}
-	ledgerSequence, err := historyQ.GetLastLedgerExpIngestNonBlocking()
-	if err != nil {
-		return errors.Wrap(err, "error getting last ledger sequence")
-	}
-
-	if ledgerSequence != 0 {
-		return errors.New("last ledger sequence set, run verify-state on empty DB")
-	}
 
 	archive, err := createArchive(config.HistoryArchiveURL)
 	if err != nil {
@@ -473,14 +465,31 @@ func VerifyStateRange(fromLedger, toLedger uint32, config Config) error {
 		})
 	}
 
-	err = session.Run()
+	ledgerSequence, err := historyQ.GetLastLedgerExpIngestNonBlocking()
+	if err != nil {
+		return errors.Wrap(err, "error getting last ledger sequence")
+	}
+
+	if ledgerSequence == 0 {
+		log.Info("Starting from empty state")
+		err = session.Run()
+	} else {
+		err := loadOrderBookGraphFromDB(historyQ, config.OrderBookGraph, ledgerSequence)
+		if err != nil {
+			return err
+		}
+		log.Infof("Resuming from ledger %d", ledgerSequence+1)
+		err = session.Resume(ledgerSequence + 1)
+	}
 	if err != nil {
 		return err
 	}
 
-	err = verifyState(config.HistorySession, archive, config.OrderBookGraph.OffersMap())
-	if err != nil {
-		return errors.Wrap(err, "State verification error")
+	if runVerifyState {
+		err = verifyState(config.HistorySession, archive, config.OrderBookGraph.OffersMap())
+		if err != nil {
+			return errors.Wrap(err, "State verification error")
+		}
 	}
 
 	return nil
