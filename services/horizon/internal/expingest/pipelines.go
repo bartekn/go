@@ -283,7 +283,7 @@ func postProcessingHook(
 
 	stateInvalid, err := historyQ.GetExpStateInvalid()
 	if err != nil {
-		log.WithField("err", err).Error("Error getting state invalid value")
+		log.WithError(err).Error("Error getting state invalid value")
 	}
 
 	// Run verification routine only when...
@@ -308,9 +308,9 @@ func postProcessingHook(
 				case verify.StateError:
 					markStateInvalid(historySession, err)
 				default:
-					logger := log.WithField("err", err).Warn
+					logger := log.WithError(err).Warn
 					if errorCount >= stateVerificationErrorThreshold {
-						logger = log.WithField("err", err).Error
+						logger = log.WithError(err).Error
 					}
 					logger("State verification errored")
 				}
@@ -325,10 +325,10 @@ func postProcessingHook(
 }
 
 func markStateInvalid(historySession *db.Session, err error) {
-	log.WithField("err", err).Error("STATE IS INVALID!")
+	log.WithError(err).Error("STATE IS INVALID!")
 	q := &history.Q{historySession.Clone()}
 	if err := q.UpdateExpStateInvalid(true); err != nil {
-		log.WithField("err", err).Error("Error updating state invalid value")
+		log.WithError(err).Error("Error updating state invalid value")
 	}
 }
 

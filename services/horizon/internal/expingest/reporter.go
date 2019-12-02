@@ -48,7 +48,7 @@ func (lr *LoggingStateReporter) OnEndState(err error, shutdown bool) {
 	}
 
 	if err != nil {
-		l.WithField("err", err).Error("Error processing History Archive Snapshot")
+		l.WithError(err).Error("Error processing History Archive Snapshot")
 	} else if shutdown {
 		l.Info("Processing History Archive Snapshot shutdown")
 	} else {
@@ -91,7 +91,7 @@ func (lr *LoggingLedgerReporter) OnEndLedger(err error, shutdown bool) {
 	}
 
 	if err != nil {
-		l.WithField("err", err).Error("Error processing ledger")
+		l.WithError(err).Error("Error processing ledger")
 	} else if shutdown {
 		l.Info("Processing ledger shutdown")
 	} else {

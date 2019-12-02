@@ -47,6 +47,17 @@ func (e *Entry) WithField(key string, value interface{}) *Entry {
 	}
 }
 
+// WithError creates a child logger annotated with the provided error in `err`
+// field.
+// A subsequent call to one of the logging methods (Debug(), Error(), etc.) to
+// the return value from this function will cause the emitted log line to
+// include the provided value.
+func (e *Entry) WithError(err error) *Entry {
+	return &Entry{
+		Entry: *e.Entry.WithField(ErrorKey, err),
+	}
+}
+
 // WithFields creates a child logger annotated with the provided key value
 // pairs.
 func (e *Entry) WithFields(fields F) *Entry {

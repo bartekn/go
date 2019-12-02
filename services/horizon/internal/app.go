@@ -190,7 +190,7 @@ func (a *App) UpdateLedgerState() {
 	var next ledger.State
 
 	logErr := func(err error, msg string) {
-		log.WithStack(err).WithField("err", err.Error()).Error(msg)
+		log.WithStack(err).WithError(err).Error(msg)
 	}
 
 	err := a.CoreQ().LatestLedger(&next.CoreLatest)
@@ -235,7 +235,7 @@ func (a *App) UpdateFeeStatsState() {
 			return
 		}
 
-		log.WithStack(err).WithField("err", err.Error()).Error(msg)
+		log.WithStack(err).WithError(err).Error(msg)
 	}
 
 	cur := operationfeestats.CurrentState()

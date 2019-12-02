@@ -12,6 +12,9 @@ import (
 // context.
 var DefaultLogger *Entry
 
+// ErrorKey is a field name used in `WithError`
+const ErrorKey = "err"
+
 const (
 	PanicLevel = logrus.PanicLevel
 	ErrorLevel = logrus.ErrorLevel

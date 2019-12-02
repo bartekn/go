@@ -290,7 +290,7 @@ func (m *ExperimentalIngestionMiddleware) Wrap(h http.Handler) http.Handler {
 				ReadOnly:  true,
 			})
 			if err != nil {
-				localLog.WithField("err", err).Error("Error starting exp ingestion read transaction")
+				localLog.WithError(err).Error("Error starting exp ingestion read transaction")
 				problem.Render(r.Context(), w, err)
 				return
 			}
@@ -298,7 +298,7 @@ func (m *ExperimentalIngestionMiddleware) Wrap(h http.Handler) http.Handler {
 
 			lastIngestedLedger, err := q.GetLastLedgerExpIngestNonBlocking()
 			if err != nil {
-				localLog.WithField("err", err).Error("Error running GetLastLedgerExpIngestNonBlocking")
+				localLog.WithError(err).Error("Error running GetLastLedgerExpIngestNonBlocking")
 				problem.Render(r.Context(), w, err)
 				return
 			}
@@ -307,7 +307,7 @@ func (m *ExperimentalIngestionMiddleware) Wrap(h http.Handler) http.Handler {
 
 		stateInvalid, err := q.GetExpStateInvalid()
 		if err != nil {
-			localLog.WithField("err", err).Error("Error running GetExpStateInvalid")
+			localLog.WithError(err).Error("Error running GetExpStateInvalid")
 			problem.Render(r.Context(), w, err)
 			return
 		}
