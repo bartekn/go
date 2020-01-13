@@ -164,7 +164,6 @@ func TestAccountInfo(t *testing.T) {
 		&core.Q{tt.CoreSession()},
 		&history.Q{tt.HorizonSession()},
 		signer,
-		false,
 	)
 	tt.Assert.NoError(err)
 

@@ -48,4 +48,3 @@ done
 
 # commit new sql files to bindata
 go generate github.com/stellar/go/services/horizon/internal/test/scenarios
-# go test github.com/stellar/go/services/horizon/internal/ingest

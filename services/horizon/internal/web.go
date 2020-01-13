@@ -211,12 +211,10 @@ func (w *web) mustInstallActions(
 		LedgerSource: ledger.NewHistoryDBSource(w.sseUpdateFrequency),
 	}
 
-	installAccountOfferRoute(
-		actions.GetAccountOffersHandler{},
-		streamHandler,
-		config.EnableExperimentalIngestion,
-		r,
-		requiresExperimentalIngestion,
+	r.With(requiresExperimentalIngestion.Wrap).Method(
+		http.MethodGet,
+		"/accounts/{account_id}/offers",
+		streamablePageHandler(actions.GetAccountOffersHandler{}, streamHandler),
 	)
 
 	// transaction history actions
@@ -263,28 +261,24 @@ func (w *web) mustInstallActions(
 		r.Get("/{offer_id}/trades", TradeIndexAction{}.Handle)
 	})
 
-	if config.EnableExperimentalIngestion {
-		r.With(requiresExperimentalIngestion.Wrap).Method(
-			http.MethodGet,
-			"/order_book",
-			streamableObjectActionHandler{
-				streamHandler: streamHandler,
-				action: actions.GetOrderbookHandler{
-					OrderBookGraph: orderBookGraph,
-				},
+	r.With(requiresExperimentalIngestion.Wrap).Method(
+		http.MethodGet,
+		"/order_book",
+		streamableObjectActionHandler{
+			streamHandler: streamHandler,
+			action: actions.GetOrderbookHandler{
+				OrderBookGraph: orderBookGraph,
 			},
-		)
-	} else {
-		r.Get("/order_book", OrderBookShowAction{}.Handle)
-	}
+		},
+	)
 
 	// Transaction submission API
 	r.Post("/transactions", TransactionCreateAction{}.Handle)
 
 	findPaths := FindPathsHandler{
 		staleThreshold:       config.StaleThreshold,
-		checkHistoryIsStale:  !config.EnableExperimentalIngestion,
-		setLastLedgerHeader:  config.EnableExperimentalIngestion,
+		checkHistoryIsStale:  !true,
+		setLastLedgerHeader:  true,
 		maxPathLength:        config.MaxPathLength,
 		maxAssetsParamLength: maxAssetsForPathFinding,
 		pathFinder:           pathFinder,
@@ -292,7 +286,7 @@ func (w *web) mustInstallActions(
 	}
 	findFixedPaths := FindFixedPathsHandler{
 		maxPathLength:        config.MaxPathLength,
-		setLastLedgerHeader:  config.EnableExperimentalIngestion,
+		setLastLedgerHeader:  true,
 		maxAssetsParamLength: maxAssetsForPathFinding,
 		pathFinder:           pathFinder,
 		coreQ:                w.coreQ,
@@ -301,19 +295,15 @@ func (w *web) mustInstallActions(
 		findPaths,
 		findFixedPaths,
 		w.router,
-		config.EnableExperimentalIngestion,
+		true,
 		requiresExperimentalIngestion,
 	)
 
-	if config.EnableExperimentalIngestion {
-		r.With(requiresExperimentalIngestion.Wrap).Method(
-			http.MethodGet,
-			"/assets",
-			restPageHandler(actions.AssetStatsHandler{}),
-		)
-	} else if config.EnableAssetStats {
-		r.Get("/assets", AssetsAction{}.Handle)
-	}
+	r.With(requiresExperimentalIngestion.Wrap).Method(
+		http.MethodGet,
+		"/assets",
+		restPageHandler(actions.AssetStatsHandler{}),
+	)
 
 	// Network state related endpoints
 	r.Get("/fee_stats", FeeStatsAction{}.Handle)

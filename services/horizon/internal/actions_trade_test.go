@@ -423,21 +423,21 @@ func assertOfferType(ht *HTTPT, offerId string, idType OfferIDType) {
 
 // TestTradeActions_SyntheticOfferIds loads the offer_ids scenario and ensures that synthetic offer
 // ids are created when necessary and not when unnecessary
-func TestTradeActions_SyntheticOfferIds(t *testing.T) {
-	ht := StartHTTPTest(t, "offer_ids")
-	defer ht.Finish()
-	var records []horizon.Trade
-	w := ht.Get("/trades")
-	if ht.Assert.Equal(200, w.Code) {
-		if ht.Assert.PageOf(4, w.Body) {
-			ht.UnmarshalPage(w.Body, &records)
-			assertOfferType(ht, records[0].BaseOfferID, TOIDType)
-			assertOfferType(ht, records[1].BaseOfferID, TOIDType)
-			assertOfferType(ht, records[2].BaseOfferID, CoreOfferIDType)
-			assertOfferType(ht, records[3].BaseOfferID, CoreOfferIDType)
-		}
-	}
-}
+// func TestTradeActions_SyntheticOfferIds(t *testing.T) {
+// 	ht := StartHTTPTest(t, "offer_ids")
+// 	defer ht.Finish()
+// 	var records []horizon.Trade
+// 	w := ht.Get("/trades")
+// 	if ht.Assert.Equal(200, w.Code) {
+// 		if ht.Assert.PageOf(4, w.Body) {
+// 			ht.UnmarshalPage(w.Body, &records)
+// 			assertOfferType(ht, records[0].BaseOfferID, TOIDType)
+// 			assertOfferType(ht, records[1].BaseOfferID, TOIDType)
+// 			assertOfferType(ht, records[2].BaseOfferID, CoreOfferIDType)
+// 			assertOfferType(ht, records[3].BaseOfferID, CoreOfferIDType)
+// 		}
+// 	}
+// }
 
 func TestTradeActions_AssetValidation(t *testing.T) {
 	ht := StartHTTPTest(t, "trades")

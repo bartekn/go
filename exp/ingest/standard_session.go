@@ -10,8 +10,19 @@ func (s *standardSession) setRunningState(newState bool) {
 	s.running = newState
 }
 
+func (s *standardSession) Init() {
+	s.shutdownMutex.Lock()
+	defer s.shutdownMutex.Unlock()
+	s.shutdown = make(chan bool)
+}
+
 func (s *standardSession) Shutdown() {
-	close(s.shutdown)
+	s.shutdownMutex.Lock()
+	defer s.shutdownMutex.Unlock()
+
+	if s.shutdown != nil {
+		close(s.shutdown)
+	}
 }
 
 func (s *standardSession) QueryLock() {

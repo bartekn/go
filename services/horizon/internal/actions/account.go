@@ -19,7 +19,7 @@ import (
 )
 
 // AccountInfo returns the information about an account identified by addr.
-func AccountInfo(ctx context.Context, cq *core.Q, hq *history.Q, addr string, enableExperimentalIngestion bool) (*protocol.Account, error) {
+func AccountInfo(ctx context.Context, cq *core.Q, hq *history.Q, addr string) (*protocol.Account, error) {
 	var (
 		coreRecord     core.Account
 		coreData       []core.AccountData
@@ -60,7 +60,6 @@ func AccountInfo(ctx context.Context, cq *core.Q, hq *history.Q, addr string, en
 		return nil, errors.Wrap(err, "populating account")
 	}
 
-	if enableExperimentalIngestion {
 		c, err := json.Marshal(resource)
 		if err != nil {
 			return nil, errors.Wrap(err, "error marshaling resource")
@@ -75,7 +74,6 @@ func AccountInfo(ctx context.Context, cq *core.Q, hq *history.Q, addr string, en
 				"accounts_check": true, // So it's easy to find all diffs
 			}).Warn("error comparing core and horizon accounts")
 		}
-	}
 
 	return &resource, nil
 }

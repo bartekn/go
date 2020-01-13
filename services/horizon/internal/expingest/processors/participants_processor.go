@@ -8,7 +8,7 @@ import (
 	ingestpipeline "github.com/stellar/go/exp/ingest/pipeline"
 	"github.com/stellar/go/exp/support/pipeline"
 	"github.com/stellar/go/services/horizon/internal/db2/history"
-	"github.com/stellar/go/services/horizon/internal/ingest/participants"
+	"github.com/stellar/go/services/horizon/internal/expingest/participants"
 	"github.com/stellar/go/services/horizon/internal/toid"
 	"github.com/stellar/go/support/errors"
 )

@@ -177,6 +177,8 @@ func NewSystem(config Config) (*System, error) {
 
 		TempSet: config.TempSet,
 	}
+	// Init initalizes shutdown channel
+	session.Init()
 
 	rangeSession := &ingest.RangeSession{
 		Archive:           archive,
@@ -191,6 +193,8 @@ func NewSystem(config Config) (*System, error) {
 
 		TempSet: config.TempSet,
 	}
+	// Init initalizes shutdown channel
+	rangeSession.Init()
 
 	system := &System{
 		session:                  session,
@@ -200,6 +204,7 @@ func NewSystem(config Config) (*System, error) {
 		graph:                    config.OrderBookGraph,
 		disableStateVerification: config.DisableStateVerification,
 		maxStreamRetries:         config.MaxStreamRetries,
+		shutdown:                 make(chan struct{}),
 	}
 
 	addPipelineHooks(
