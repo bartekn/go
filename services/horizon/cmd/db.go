@@ -11,14 +11,14 @@ import (
 	"github.com/stellar/go/services/horizon/internal/db2/schema"
 )
 
-type reingestType int
+// type reingestType int
 
-const (
-	byAll reingestType = iota
-	byRange
-	bySeq
-	byOutdated
-)
+// const (
+// 	byAll reingestType = iota
+// 	byRange
+// 	bySeq
+// 	byOutdated
+// )
 
 var dbCmd = &cobra.Command{
 	Use:   "db [command]",
