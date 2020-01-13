@@ -60,20 +60,20 @@ func AccountInfo(ctx context.Context, cq *core.Q, hq *history.Q, addr string) (*
 		return nil, errors.Wrap(err, "populating account")
 	}
 
-		c, err := json.Marshal(resource)
-		if err != nil {
-			return nil, errors.Wrap(err, "error marshaling resource")
-		}
+	c, err := json.Marshal(resource)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshaling resource")
+	}
 
-		// We send JSON bytes to compareAccountResults to prevent modifying
-		// `resource` in any way.
-		err = compareAccountResults(ctx, hq, c, addr)
-		if err != nil {
-			log.Ctx(ctx).WithFields(log.F{
-				"err":            err,
-				"accounts_check": true, // So it's easy to find all diffs
-			}).Warn("error comparing core and horizon accounts")
-		}
+	// We send JSON bytes to compareAccountResults to prevent modifying
+	// `resource` in any way.
+	err = compareAccountResults(ctx, hq, c, addr)
+	if err != nil {
+		log.Ctx(ctx).WithFields(log.F{
+			"err":            err,
+			"accounts_check": true, // So it's easy to find all diffs
+		}).Warn("error comparing core and horizon accounts")
+	}
 
 	return &resource, nil
 }
