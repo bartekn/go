@@ -686,6 +686,10 @@ func (s *System) resume() (state, error) {
 	if updateDatabase {
 		// Add history data to a database
 		ledgerProcessors := s.getLedgerProcessors()
+
+		// TODO, if we're s.config.IngestFailedTransactions == false we can wrap
+		// LedgerReader to skip failed.
+
 		err = ledgerProcessors.ProcessLedgerReader(ledgerReader)
 		if err != nil {
 			// Context cancelled = shutdown
