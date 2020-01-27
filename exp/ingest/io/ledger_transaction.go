@@ -15,6 +15,7 @@ import (
 // If an entry is updated: Pre is not nil and Post is not nil.
 // If an entry is removed: Pre is not nil and Post is nil.
 type Change struct {
+	// Type could be a method on Change
 	Type xdr.LedgerEntryType
 	Pre  *xdr.LedgerEntry
 	Post *xdr.LedgerEntry
