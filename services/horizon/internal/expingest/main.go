@@ -133,11 +133,6 @@ type state struct {
 	noSleep bool
 }
 
-type processingMode struct {
-	ingestState    bool
-	ingestDatabase bool
-}
-
 type System struct {
 	config Config
 	state  state
@@ -565,7 +560,8 @@ func (s *System) buildState() (state, error) {
 	}
 	defer stateReader.Close()
 
-	processors := s.getStateProcessors(true)
+	updateDatabase := true
+	processors := s.getStateProcessors(updateDatabase)
 	err = processors.ProcessStateReader(stateReader)
 	if err != nil {
 		// Context cancelled = shutdown
@@ -698,9 +694,7 @@ func (s *System) resume() (state, error) {
 			}
 			return defaultReturnState, err
 		}
-	}
 
-	if updateDatabase {
 		// If we're in a transaction we're updating database with new data.
 		// We get lastIngestedLedger from a DB here to do an extra check
 		// if the current node should really be updating a DB.
