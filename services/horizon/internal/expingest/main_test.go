@@ -128,6 +128,33 @@ func TestStateMachineTransition(t *testing.T) {
 	})
 }
 
+// TestReingestRange ensures that state params are correctly passed.
+func TestReingestRange(t *testing.T) {
+	historyQ := &mockDBQ{}
+	runner := &mockProcessorsRunner{}
+	system := &System{
+		historyQ: historyQ,
+		runner:   runner,
+		ctx:      context.Background(),
+	}
+
+	historyQ.On("GetTx").Return(nil).Once()
+
+	historyQ.On("Begin").Return(nil).Once()
+	historyQ.On("GetLastLedgerExpIngest").Return(uint32(0), nil).Once()
+
+	historyQ.On("DeleteRangeAll", int64(0), int64(47244640256)).Return(nil).Once()
+
+	for i := 1; i <= 10; i++ {
+		runner.On("RunTransactionProcessorsOnLedger", uint32(i)).Return(nil).Once()
+	}
+
+	historyQ.On("Commit").Return(nil).Once()
+	historyQ.On("Rollback").Return(nil).Once()
+
+	system.ReingestRange(1, 10)
+}
+
 func TestContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	historyQ := &mockDBQ{}
