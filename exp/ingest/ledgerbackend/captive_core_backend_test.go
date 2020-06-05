@@ -30,6 +30,11 @@ func (m *stellarCoreRunnerMock) runFrom(from uint32) error {
 	return a.Error(0)
 }
 
+func (m *stellarCoreRunnerMock) getLogFilePath() string {
+	a := m.Called()
+	return a.Get(0).(string)
+}
+
 func (m *stellarCoreRunnerMock) getMetaPipe() io.Reader {
 	a := m.Called()
 	return a.Get(0).(io.Reader)
