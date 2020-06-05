@@ -1,7 +1,6 @@
 package ledgerbackend
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +17,7 @@ import (
 type stellarCoreRunnerInterface interface {
 	catchup(from, to uint32) error
 	runFrom(from uint32) error
+	getLogFilePath() string
 	getMetaPipe() io.Reader
 	close() error
 }
@@ -83,22 +82,16 @@ func (r *stellarCoreRunner) getConfFileName() string {
 	return filepath.Join(r.getTmpDir(), "stellar-core.conf")
 }
 
-func (*stellarCoreRunner) getLogLineWriter() io.Writer {
-	r, w := io.Pipe()
-	br := bufio.NewReader(r)
-	// Strip timestamps from log lines from captive stellar-core. We emit our own.
-	dateRx := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3} `)
-	go func() {
-		for {
-			line, err := br.ReadString('\n')
-			if err != nil {
-				break
-			}
-			line = dateRx.ReplaceAllString(line, "")
-			fmt.Print(line)
-		}
-	}()
-	return w
+func (r *stellarCoreRunner) getLogLineWriter() (io.Writer, error) {
+	f, err := os.OpenFile(r.getLogFilePath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating a stellar-core.log file")
+	}
+	return f, nil
+}
+
+func (r *stellarCoreRunner) getLogFilePath() string {
+	return fmt.Sprintf("%s/stellar-core.log", r.getTmpDir())
 }
 
 func (r *stellarCoreRunner) getTmpDir() string {
@@ -135,8 +128,12 @@ func (r *stellarCoreRunner) catchup(from, to uint32) error {
 		return errors.Wrap(err, "error starting `stellar-core new-db` subprocess")
 	}
 	cmd.Dir = r.getTmpDir()
-	cmd.Stdout = r.getLogLineWriter()
-	cmd.Stderr = r.getLogLineWriter()
+	writer, err := r.getLogLineWriter()
+	if err != nil {
+		return errors.Wrap(err, "error creating a log writer")
+	}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
 	err = cmd.Wait()
 	if err != nil {
 		return errors.Wrap(err, "error waiting for `stellar-core new-db` subprocess")
@@ -146,8 +143,8 @@ func (r *stellarCoreRunner) catchup(from, to uint32) error {
 	args := []string{"--conf", r.getConfFileName(), "catchup", rangeArg, "--replay-in-memory"}
 	cmd = exec.Command(r.executablePath, args...)
 	cmd.Dir = r.getTmpDir()
-	cmd.Stdout = r.getLogLineWriter()
-	cmd.Stderr = r.getLogLineWriter()
+	cmd.Stdout = writer
+	cmd.Stderr = writer
 	r.cmd = cmd
 	r.metaPipe, err = r.start()
 	if err != nil {
@@ -170,8 +167,12 @@ func (r *stellarCoreRunner) runFrom(from uint32) error {
 		return errors.Wrap(err, "error starting `stellar-core new-db` subprocess")
 	}
 	cmd.Dir = r.getTmpDir()
-	cmd.Stdout = r.getLogLineWriter()
-	cmd.Stderr = r.getLogLineWriter()
+	writer, err := r.getLogLineWriter()
+	if err != nil {
+		return errors.Wrap(err, "error creating a log writer")
+	}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
 	err = cmd.Wait()
 	if err != nil {
 		return errors.Wrap(err, "error waiting for `stellar-core new-db` subprocess")
@@ -183,8 +184,8 @@ func (r *stellarCoreRunner) runFrom(from uint32) error {
 		"catchup", fmt.Sprintf("%d/0", from-1),
 	}...)
 	cmd.Dir = r.getTmpDir()
-	cmd.Stdout = r.getLogLineWriter()
-	cmd.Stderr = r.getLogLineWriter()
+	cmd.Stdout = writer
+	cmd.Stderr = writer
 	err = cmd.Start()
 	if err != nil {
 		return errors.Wrapf(err, "error starting `stellar-core catchup %d/0` subprocess", from-1)
@@ -197,8 +198,13 @@ func (r *stellarCoreRunner) runFrom(from uint32) error {
 	args := []string{"--conf", r.getConfFileName(), "run"}
 	cmd = exec.Command(r.executablePath, args...)
 	cmd.Dir = r.getTmpDir()
-	cmd.Stdout = r.getLogLineWriter()
-	cmd.Stderr = r.getLogLineWriter()
+	// In order to get the full stellar core logs:
+	logWriter, err := r.getLogLineWriter()
+	if err != nil {
+		return errors.Wrap(err, "error creting log writer")
+	}
+	cmd.Stdout = logWriter
+	cmd.Stderr = logWriter
 	r.cmd = cmd
 	r.metaPipe, err = r.start()
 	if err != nil {

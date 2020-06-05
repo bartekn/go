@@ -249,6 +249,10 @@ func (c *CaptiveStellarCore) readLedgerMetaFromPipe() (*xdr.LedgerCloseMeta, err
 	return &xlcm, nil
 }
 
+func (c *CaptiveStellarCore) GetStellarCoreLogFilePath() string {
+	return c.stellarCoreRunner.getLogFilePath()
+}
+
 // PrepareRange prepares the given range (including from and to) to be loaded.
 // Some backends (like captive stellar-core) need to initalize data to be
 // able to stream ledgers.

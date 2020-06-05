@@ -144,6 +144,10 @@ func NewSystem(config Config) (*System, error) {
 			config.NetworkPassphrase,
 			[]string{config.HistoryArchiveURL},
 		)
+		log.Infof(
+			"Logging stellar-core output to the file: %s",
+			ledgerBackend.(*ledgerbackend.CaptiveStellarCore).GetStellarCoreLogFilePath(),
+		)
 	} else {
 		ledgerBackend, err = ledgerbackend.NewDatabaseBackendFromSession(coreSession)
 		if err != nil {
