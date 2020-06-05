@@ -16,9 +16,11 @@ import (
 	"github.com/pkg/errors"
 )
 
+const pipeBufferSize = 1024 * 1024
+
 type stellarCoreRunnerInterface interface {
 	run(from, to uint32) error
-	getMetaPipe() io.Reader
+	getMetaPipe() *bufferedPipe
 	close() error
 }
 
@@ -28,7 +30,7 @@ type stellarCoreRunner struct {
 	historyURLs       []string
 
 	cmd      *exec.Cmd
-	metaPipe io.Reader
+	metaPipe *bufferedPipe
 	tempDir  string
 }
 
@@ -130,7 +132,7 @@ func (r *stellarCoreRunner) getConfFileName() string {
 	return filepath.Join(r.getTmpDir(), "stellar-core.conf")
 }
 
-func (*stellarCoreRunner) GetLogLineWriter() io.Writer {
+func (*stellarCoreRunner) getLogLineWriter() io.Writer {
 	r, w := io.Pipe()
 	br := bufio.NewReader(r)
 	// Strip timestamps from log lines from captive stellar-core. We emit our own.
@@ -182,8 +184,8 @@ func (r *stellarCoreRunner) run(from, to uint32) error {
 		return errors.Wrap(err, "error starting `stellar-core new-db` subprocess")
 	}
 	cmd.Dir = r.getTmpDir()
-	cmd.Stdout = r.GetLogLineWriter()
-	cmd.Stderr = r.GetLogLineWriter()
+	cmd.Stdout = r.getLogLineWriter()
+	cmd.Stderr = r.getLogLineWriter()
 	err = cmd.Wait()
 	if err != nil {
 		return errors.Wrap(err, "error waiting for `stellar-core new-db` subprocess")
@@ -195,8 +197,8 @@ func (r *stellarCoreRunner) run(from, to uint32) error {
 		"catchup", fmt.Sprintf("%d/0", from-1),
 	}...)
 	cmd.Dir = r.getTmpDir()
-	cmd.Stdout = r.GetLogLineWriter()
-	cmd.Stderr = r.GetLogLineWriter()
+	cmd.Stdout = r.getLogLineWriter()
+	cmd.Stderr = r.getLogLineWriter()
 	err = cmd.Start()
 	if err != nil {
 		return errors.Wrap(err, "error starting `stellar-core catchup X/0` subprocess")
@@ -211,17 +213,28 @@ func (r *stellarCoreRunner) run(from, to uint32) error {
 	cmd = exec.Command(r.executablePath, args...)
 	cmd.Dir = r.getTmpDir()
 	// In order to get the full stellar core logs:
-	cmd.Stdout = r.GetLogLineWriter()
+	cmd.Stdout = r.getLogLineWriter()
 	// cmd.Stderr = r.GetLogLineWriter()
 	r.cmd = cmd
-	err = r.start()
+	reader, err := r.start()
 	if err != nil {
 		return errors.Wrap(err, "error starting `stellar-core run` subprocess")
 	}
+
+	r.metaPipe = newBufferedPipe(pipeBufferSize)
+	go func() {
+		for {
+			io.Copy(r.metaPipe, reader)
+			if !r.processIsAlive() {
+				return
+			}
+		}
+	}()
+
 	return nil
 }
 
-func (r *stellarCoreRunner) getMetaPipe() io.Reader {
+func (r *stellarCoreRunner) getMetaPipe() *bufferedPipe {
 	return r.metaPipe
 }
 
