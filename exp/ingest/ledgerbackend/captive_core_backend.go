@@ -160,7 +160,7 @@ func (c *captiveStellarCore) openOfflineReplaySubprocess(nextLedger, lastLedger 
 	c.nextLedgerMutex.Lock()
 	c.nextLedger = roundDownToFirstReplayAfterCheckpointStart(nextLedger)
 	c.nextLedgerMutex.Unlock()
-	c.lastLedger = &lastLedger
+	// c.lastLedger = &lastLedger
 	return nil
 }
 
@@ -211,9 +211,9 @@ func (c *captiveStellarCore) GetLedger(sequence uint32) (bool, LedgerCloseMeta, 
 	}
 
 	// Check that we're where we expect to be: in range ...
-	if !c.LedgerWithinCheckpoints(sequence, 1) {
-		return false, LedgerCloseMeta{}, errors.New("unexpected subprocess next-ledger")
-	}
+	// if !c.LedgerWithinCheckpoints(sequence, 1) {
+	// 	return false, LedgerCloseMeta{}, errors.New("unexpected subprocess next-ledger")
+	// }
 
 	// ... and open
 	metaPipe := c.stellarCoreRunner.getMetaPipe()
@@ -240,15 +240,15 @@ func (c *captiveStellarCore) GetLedger(sequence uint32) (bool, LedgerCloseMeta, 
 			errOut = e1
 			break
 		}
-		c.nextLedgerMutex.Lock()
-		if seq != c.nextLedger {
-			// We got something unexpected; close and reset
-			errOut = errors.Errorf("unexpected ledger (expected=%d actual=%d)", c.nextLedger, seq)
-			c.nextLedgerMutex.Unlock()
-			break
-		}
-		c.nextLedger++
-		c.nextLedgerMutex.Unlock()
+		// c.nextLedgerMutex.Lock()
+		// if seq != c.nextLedger {
+		// 	// We got something unexpected; close and reset
+		// 	errOut = errors.Errorf("unexpected ledger (expected=%d actual=%d)", c.nextLedger, seq)
+		// 	c.nextLedgerMutex.Unlock()
+		// 	break
+		// }
+		// c.nextLedger++
+		// c.nextLedgerMutex.Unlock()
 		if seq == sequence {
 			// Found the requested seq
 			var lcm LedgerCloseMeta
