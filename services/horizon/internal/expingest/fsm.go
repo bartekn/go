@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/stellar/go/exp/ingest/io"
-	"github.com/stellar/go/exp/ingest/ledgerbackend"
 	"github.com/stellar/go/services/horizon/internal/toid"
 	"github.com/stellar/go/support/errors"
 	logpkg "github.com/stellar/go/support/log"
@@ -295,6 +294,11 @@ func (b buildState) run(s *System) (transition, error) {
 	}).Info("Processing state")
 	startTime := time.Now()
 
+	err = s.ledgerBackend.PrepareRange(b.checkpointLedger, 0)
+	if err != nil {
+		return stop(), errors.Wrap(err, "error preparing range")
+	}
+
 	stats, err := s.runner.RunHistoryArchiveIngestion(b.checkpointLedger)
 	if err != nil {
 		return start(), errors.Wrap(err, "Error ingesting history archive")
@@ -380,6 +384,11 @@ func (r resumeState) run(s *System) (transition, error) {
 				"going back to start state",
 		)
 		return start(), nil
+	}
+
+	err = s.ledgerBackend.PrepareRange(ingestLedger, 0)
+	if err != nil {
+		return stop(), errors.Wrap(err, "error preparing range")
 	}
 
 	// Check if ledger is closed
@@ -540,6 +549,11 @@ func (h historyRangeState) run(s *System) (transition, error) {
 		return start(), nil
 	}
 
+	err = s.ledgerBackend.PrepareRange(h.fromLedger, 0)
+	if err != nil {
+		return stop(), errors.Wrap(err, "error preparing range")
+	}
+
 	for cur := h.fromLedger; cur <= h.toLedger; cur++ {
 		if err = runTransactionProcessorsOnLedger(s, cur); err != nil {
 			return start(), err
@@ -630,15 +644,6 @@ func (h reingestHistoryRangeState) run(s *System) (transition, error) {
 	if h.fromLedger == 0 || h.toLedger == 0 ||
 		h.fromLedger > h.toLedger {
 		return stop(), errors.Errorf("invalid range: [%d, %d]", h.fromLedger, h.toLedger)
-	}
-
-	// Set blocking mode when using captive core. Horizon is actually able to ingest
-	// historical data faster than core (because we don't update ledger entries) so
-	// instead of using `time.Sleep` to wait for core to apply a ledger it's faster
-	// to simply block when reading a ledger.
-	if captive, ok := s.ledgerBackend.(*ledgerbackend.CaptiveStellarCore); ok {
-		log.Info("Set blocking mode in captive stellar-core")
-		captive.SetBlockingMode(true)
 	}
 
 	log.WithFields(logpkg.F{
