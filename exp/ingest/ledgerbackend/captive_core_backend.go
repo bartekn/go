@@ -27,9 +27,6 @@ var _ LedgerBackend = (*CaptiveStellarCore)(nil)
 
 // TODO: switch from history URLs to history archive interface provided from support package, to permit mocking
 
-// In this (crude, initial) sketch, we replay ledgers in blocks of 17,280
-// which is 24 hours worth of ledgers at 5 second intervals.
-const ledgersPerProcess = 17280
 const ledgersPerCheckpoint = 64
 
 func roundDownToFirstReplayAfterCheckpointStart(ledger uint32) uint32 {
