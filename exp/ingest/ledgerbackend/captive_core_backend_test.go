@@ -1,7 +1,6 @@
 package ledgerbackend
 
 import (
-	"bytes"
 	"encoding/hex"
 	"io"
 	"testing"
@@ -20,14 +19,19 @@ type stellarCoreRunnerMock struct {
 	mock.Mock
 }
 
-func (m *stellarCoreRunnerMock) run(from, to uint32) error {
+func (m *stellarCoreRunnerMock) catchup(from, to uint32) error {
 	a := m.Called(from, to)
 	return a.Error(0)
 }
 
-func (m *stellarCoreRunnerMock) getMetaPipe() io.Reader {
+func (m *stellarCoreRunnerMock) runFrom(from uint32) error {
+	a := m.Called(from)
+	return a.Error(0)
+}
+
+func (m *stellarCoreRunnerMock) getMetaPipe() *bufferedPipe {
 	a := m.Called()
-	return a.Get(0).(io.Reader)
+	return a.Get(0).(*bufferedPipe)
 }
 
 func (m *stellarCoreRunnerMock) close() error {
@@ -108,24 +112,21 @@ func TestCaptiveNew(t *testing.T) {
 }
 
 func TestCaptivePrepareRange(t *testing.T) {
-	var buf bytes.Buffer
+	buf := newBufferedPipe(1024 * 1024)
 
 	// Core will actually start with the last checkpoint before the from ledger
 	// and then rewind to the `from` ledger.
 	for i := 64; i <= 99; i++ {
-		err := writeLedgerHeader(&buf, uint32(i))
+		err := writeLedgerHeader(buf, uint32(i))
 		require.NoError(t, err)
 	}
 
 	mockRunner := &stellarCoreRunnerMock{}
-	// We prepare [from-1, to] range because it's not possible to rewind the reader
-	// and there is no other way to check if stellar-core has built the state without
-	// reading actual ledger.
-	mockRunner.On("run", uint32(99), uint32(200)).Return(nil).Once()
-	mockRunner.On("getMetaPipe").Return(&buf)
+	mockRunner.On("catchup", uint32(100), uint32(200)).Return(nil).Once()
+	mockRunner.On("getMetaPipe").Return(buf)
 	mockRunner.On("close").Return(nil).Once()
 
-	captiveBackend := captiveStellarCore{
+	captiveBackend := CaptiveStellarCore{
 		networkPassphrase: network.PublicNetworkPassphrase,
 		historyURLs:       []string{"http://history.stellar.org/prd/core-live/core_live_001"},
 		stellarCoreRunner: mockRunner,
