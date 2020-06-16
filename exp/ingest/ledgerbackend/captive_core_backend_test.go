@@ -1,6 +1,7 @@
 package ledgerbackend
 
 import (
+	"bytes"
 	"encoding/hex"
 	"io"
 	"testing"
@@ -29,9 +30,9 @@ func (m *stellarCoreRunnerMock) runFrom(from uint32) error {
 	return a.Error(0)
 }
 
-func (m *stellarCoreRunnerMock) getMetaPipe() *bufferedPipe {
+func (m *stellarCoreRunnerMock) getMetaPipe() io.Reader {
 	a := m.Called()
-	return a.Get(0).(*bufferedPipe)
+	return a.Get(0).(io.Reader)
 }
 
 func (m *stellarCoreRunnerMock) close() error {
@@ -112,18 +113,18 @@ func TestCaptiveNew(t *testing.T) {
 }
 
 func TestCaptivePrepareRange(t *testing.T) {
-	buf := newBufferedPipe(1024 * 1024)
+	var buf bytes.Buffer
 
 	// Core will actually start with the last checkpoint before the from ledger
 	// and then rewind to the `from` ledger.
 	for i := 64; i <= 99; i++ {
-		err := writeLedgerHeader(buf, uint32(i))
+		err := writeLedgerHeader(&buf, uint32(i))
 		require.NoError(t, err)
 	}
 
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(100), uint32(200)).Return(nil).Once()
-	mockRunner.On("getMetaPipe").Return(buf)
+	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil).Once()
 
 	captiveBackend := CaptiveStellarCore{
