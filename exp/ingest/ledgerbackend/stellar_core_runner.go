@@ -21,7 +21,7 @@ const pipeBufferSize = 1024 * 1024
 type stellarCoreRunnerInterface interface {
 	catchup(from, to uint32) error
 	runFrom(from uint32) error
-	getMetaPipe() *bufferedPipe
+	getMetaPipe() io.Reader
 	close() error
 }
 
@@ -31,7 +31,7 @@ type stellarCoreRunner struct {
 	historyURLs       []string
 
 	cmd      *exec.Cmd
-	metaPipe *bufferedPipe
+	metaPipe io.Reader
 	tempDir  string
 }
 
@@ -151,20 +151,10 @@ func (r *stellarCoreRunner) catchup(from, to uint32) error {
 	cmd.Stdout = r.getLogLineWriter()
 	cmd.Stderr = r.getLogLineWriter()
 	r.cmd = cmd
-	reader, err := r.start()
+	r.metaPipe, err = r.start()
 	if err != nil {
 		return errors.Wrap(err, "error starting `stellar-core run` subprocess")
 	}
-
-	r.metaPipe = newBufferedPipe(pipeBufferSize)
-	go func() {
-		for {
-			io.Copy(r.metaPipe, reader)
-			if !r.processIsAlive() {
-				return
-			}
-		}
-	}()
 
 	return nil
 }
@@ -212,25 +202,15 @@ func (r *stellarCoreRunner) runFrom(from uint32) error {
 	cmd.Stdout = r.getLogLineWriter()
 	cmd.Stderr = r.getLogLineWriter()
 	r.cmd = cmd
-	reader, err := r.start()
+	r.metaPipe, err = r.start()
 	if err != nil {
 		return errors.Wrap(err, "error starting `stellar-core run` subprocess")
 	}
 
-	r.metaPipe = newBufferedPipe(pipeBufferSize)
-	go func() {
-		for {
-			io.Copy(r.metaPipe, reader)
-			if !r.processIsAlive() {
-				return
-			}
-		}
-	}()
-
 	return nil
 }
 
-func (r *stellarCoreRunner) getMetaPipe() *bufferedPipe {
+func (r *stellarCoreRunner) getMetaPipe() io.Reader {
 	return r.metaPipe
 }
 

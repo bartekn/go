@@ -2,11 +2,14 @@ package ledgerbackend
 
 import (
 	"io"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
+
 	"github.com/stellar/go/network"
 	"github.com/stellar/go/support/historyarchive"
+	"github.com/stellar/go/support/log"
 	"github.com/stellar/go/xdr"
 )
 
@@ -27,7 +30,10 @@ var _ LedgerBackend = (*CaptiveStellarCore)(nil)
 
 // TODO: switch from history URLs to history archive interface provided from support package, to permit mocking
 
-const ledgersPerCheckpoint = 64
+const (
+	ledgersPerCheckpoint = 64
+	readAheadBufferSize  = 2
+)
 
 func roundDownToFirstReplayAfterCheckpointStart(ledger uint32) uint32 {
 	v := (ledger / ledgersPerCheckpoint) * ledgersPerCheckpoint
@@ -38,9 +44,20 @@ func roundDownToFirstReplayAfterCheckpointStart(ledger uint32) uint32 {
 	return v
 }
 
+type metaResult struct {
+	*xdr.LedgerCloseMeta
+	err error
+}
+
 type CaptiveStellarCore struct {
 	networkPassphrase string
 	historyURLs       []string
+
+	// read-ahead buffer
+	stop  chan struct{}
+	wait  sync.WaitGroup
+	metaC chan metaResult
+
 	stellarCoreRunner stellarCoreRunnerInterface
 	cachedMeta        *LedgerCloseMeta
 
@@ -164,6 +181,12 @@ func (c *CaptiveStellarCore) openOfflineReplaySubprocess(from, to uint32) error 
 	c.nextLedger = roundDownToFirstReplayAfterCheckpointStart(from)
 	c.lastLedger = &to
 	c.blocking = true
+
+	// read-ahead buffer
+	c.metaC = make(chan metaResult, readAheadBufferSize)
+	c.stop = make(chan struct{})
+	c.wait.Add(1)
+	go c.sendLedgerMeta(to)
 	return nil
 }
 
@@ -206,7 +229,75 @@ func (c *CaptiveStellarCore) openOnlineReplaySubprocess(from uint32) error {
 	c.nextLedger = from
 	c.lastLedger = nil
 	c.blocking = false
+
+	// read-ahead buffer
+	c.metaC = make(chan metaResult, readAheadBufferSize)
+	c.stop = make(chan struct{})
+	c.wait.Add(1)
+	go c.sendLedgerMeta(0)
 	return nil
+}
+
+// sendLedgerMeta reads from the captive core pipe, decodes the ledger metadata
+// and sends it to the metadata buffered channel
+func (c *CaptiveStellarCore) sendLedgerMeta(untilSequence uint32) {
+	defer c.wait.Done()
+	printBufferOccupation := time.NewTicker(5 * time.Second)
+	defer printBufferOccupation.Stop()
+	for {
+		select {
+		case <-c.stop:
+			return
+		case <-printBufferOccupation.C:
+			log.Debug("captive core read-ahead buffer occupation:", len(c.metaC))
+		default:
+		}
+		meta, err := c.readLedgerMetaFromPipe()
+		if err != nil {
+			select {
+			case <-c.stop:
+			case c.metaC <- metaResult{nil, err}:
+			}
+			return
+		}
+		select {
+		case <-c.stop:
+			return
+		case c.metaC <- metaResult{meta, nil}:
+		}
+
+		if untilSequence != 0 {
+			seq, err := peekLedgerSequence(meta)
+			if err != nil {
+				select {
+				case <-c.stop:
+				case c.metaC <- metaResult{nil, err}:
+				}
+				return
+			}
+			if seq >= untilSequence {
+				// we are done
+				return
+			}
+		}
+	}
+}
+
+func (c *CaptiveStellarCore) readLedgerMetaFromPipe() (*xdr.LedgerCloseMeta, error) {
+	metaPipe := c.stellarCoreRunner.getMetaPipe()
+	if metaPipe == nil {
+		return nil, errors.New("missing metadata pipe")
+	}
+	var xlcm xdr.LedgerCloseMeta
+	_, e0 := xdr.UnmarshalFramed(metaPipe, &xlcm)
+	if e0 != nil {
+		if e0 == io.EOF {
+			return nil, errors.Wrap(e0, "got EOF from subprocess")
+		} else {
+			return nil, errors.Wrap(e0, "unmarshalling framed LedgerCloseMeta")
+		}
+	}
+	return &xlcm, nil
 }
 
 // PrepareRange prepares the given range (including from and to) to be loaded.
@@ -235,8 +326,8 @@ func (c *CaptiveStellarCore) PrepareRange(from uint32, to uint32) error {
 	}
 
 	for {
-		// Wait for the first byte
-		if !metaPipe.IsEmpty() {
+		// Wait for the first ledger
+		if len(c.metaC) > 0 {
 			break
 		}
 		time.Sleep(time.Second)
@@ -265,32 +356,23 @@ func (c *CaptiveStellarCore) GetLedger(sequence uint32) (bool, LedgerCloseMeta, 
 		return false, LedgerCloseMeta{}, errors.New("session is closed, call PrepareRange first")
 	}
 
-	metaPipe := c.stellarCoreRunner.getMetaPipe()
-	if metaPipe == nil {
-		return false, LedgerCloseMeta{}, errors.New("missing metadata pipe")
-	}
-
 	// Now loop along the range until we find the ledger we want.
 	var errOut error
+loop:
 	for {
 		if !c.blocking {
-			if metaPipe.IsEmpty() {
+			if len(c.metaC) == 0 {
 				return false, LedgerCloseMeta{}, nil
 			}
 		}
 
-		var xlcm xdr.LedgerCloseMeta
-		_, e0 := xdr.UnmarshalFramed(metaPipe, &xlcm)
-		if e0 != nil {
-			if e0 == io.EOF {
-				errOut = errors.Wrap(e0, "got EOF from subprocess")
-				break
-			} else {
-				errOut = errors.Wrap(e0, "unmarshalling framed LedgerCloseMeta")
-				break
-			}
+		metaResult := <-c.metaC
+		if metaResult.err != nil {
+			errOut = metaResult.err
+			break loop
 		}
-		seq, e1 := peekLedgerSequence(&xlcm)
+
+		seq, e1 := peekLedgerSequence(metaResult.LedgerCloseMeta)
 		if e1 != nil {
 			errOut = e1
 			break
@@ -304,7 +386,7 @@ func (c *CaptiveStellarCore) GetLedger(sequence uint32) (bool, LedgerCloseMeta, 
 		if seq == sequence {
 			// Found the requested seq
 			var lcm LedgerCloseMeta
-			e2 := c.copyLedgerCloseMeta(&xlcm, &lcm)
+			e2 := c.copyLedgerCloseMeta(metaResult.LedgerCloseMeta, &lcm)
 			if e2 != nil {
 				errOut = e2
 				break
@@ -338,7 +420,7 @@ func (c *CaptiveStellarCore) GetLatestLedgerSequence() (uint32, error) {
 
 	if c.lastLedger == nil {
 		// TODO Get latest buffered ledger when XDR buffer is ready
-		if !c.stellarCoreRunner.getMetaPipe().IsEmpty() {
+		if len(c.metaC) > 0 {
 			return c.nextLedger, nil
 		} else {
 			return c.nextLedger - 1, nil
@@ -359,6 +441,19 @@ func (c *CaptiveStellarCore) Close() error {
 	}
 	c.nextLedger = 0
 	c.lastLedger = nil
+
+	if c.stop != nil {
+		close(c.stop)
+		// discard pending data in case the goroutine is blocked writing to the channel
+		select {
+		case <-c.metaC:
+		default:
+		}
+		// Do not close the communication channel until we know
+		// the goroutine is done
+		c.wait.Wait()
+		close(c.metaC)
+	}
 
 	err := c.stellarCoreRunner.close()
 	if err != nil {
