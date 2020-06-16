@@ -16,8 +16,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-const pipeBufferSize = 1024 * 1024
-
 type stellarCoreRunnerInterface interface {
 	catchup(from, to uint32) error
 	runFrom(from uint32) error
