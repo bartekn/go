@@ -18,21 +18,21 @@ func (c *stellarCoreRunner) getPipeName() string {
 
 func (c *stellarCoreRunner) start() (io.Reader, error) {
 	// First set up the server pipe.
-	listener, e := winio.ListenPipe(c.getPipeName(), nil)
-	if e != nil {
-		return io.Reader(nil), e
+	listener, err := winio.ListenPipe(c.getPipeName(), nil)
+	if err != nil {
+		return io.Reader(nil), err
 	}
 
 	// Then write config file pointing to it.
-	e = c.writeConf()
-	if e != nil {
-		return io.Reader(nil), e
+	err = c.writeConf()
+	if err != nil {
+		return io.Reader(nil), err
 	}
 
 	// Then start the process.
-	e = c.cmd.Start()
-	if e != nil {
-		return io.Reader(nil), e
+	err = c.cmd.Start()
+	if err != nil {
+		return io.Reader(nil), err
 	}
 
 	// Launch a goroutine to reap immediately on exit (I think this is right,
@@ -44,9 +44,9 @@ func (c *stellarCoreRunner) start() (io.Reader, error) {
 	}()
 
 	// Then accept on the server end.
-	connection, e := listener.Accept()
+	connection, err := listener.Accept()
 	if e != nil {
-		return connection, e
+		return connection, err
 	}
 
 	return connection, nil
@@ -59,8 +59,8 @@ func (c *captiveStellarCore) processIsAlive() bool {
 	if c.cmd.Process == nil {
 		return false
 	}
-	p, e := os.FindProcess(c.cmd.Process.Pid)
-	if e != nil || p == nil {
+	p, err := os.FindProcess(c.cmd.Process.Pid)
+	if err != nil || p == nil {
 		return false
 	}
 	return true

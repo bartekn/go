@@ -22,25 +22,25 @@ func (c *stellarCoreRunner) getPipeName() string {
 func (c *stellarCoreRunner) start() (io.Reader, error) {
 	// First make an anonymous pipe.
 	// Note io.File objects close-on-finalization.
-	readFile, writeFile, e := os.Pipe()
-	if e != nil {
-		return readFile, errors.Wrap(e, "error making a pipe")
+	readFile, writeFile, err := os.Pipe()
+	if err != nil {
+		return readFile, errors.Wrap(err, "error making a pipe")
 	}
 
 	defer writeFile.Close()
 
 	// Then write config file pointing to it.
-	e = c.writeConf()
-	if e != nil {
-		return readFile, errors.Wrap(e, "error writing conf")
+	err = c.writeConf()
+	if err != nil {
+		return readFile, errors.Wrap(err, "error writing conf")
 	}
 
 	// Add the write-end to the set of inherited file handles. This is defined
 	// to be fd 3 on posix platforms.
 	c.cmd.ExtraFiles = []*os.File{writeFile}
-	e = c.cmd.Start()
-	if e != nil {
-		return readFile, errors.Wrap(e, "error starting stellar-core")
+	err = c.cmd.Start()
+	if err != nil {
+		return readFile, errors.Wrap(err, "error starting stellar-core")
 	}
 
 	// Launch a goroutine to reap immediately on exit (I think this is right,

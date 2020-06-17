@@ -90,8 +90,8 @@ func (*stellarCoreRunner) getLogLineWriter() io.Writer {
 	dateRx := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3} `)
 	go func() {
 		for {
-			line, e := br.ReadString('\n')
-			if e != nil {
+			line, err := br.ReadString('\n')
+			if err != nil {
 				break
 			}
 			line = dateRx.ReplaceAllString(line, "")
@@ -114,9 +114,9 @@ func (r *stellarCoreRunner) getTmpDir() string {
 // platform-specific captiveStellarCore.Start() methods.
 func (r *stellarCoreRunner) writeConf() error {
 	dir := r.getTmpDir()
-	e := os.MkdirAll(dir, 0755)
-	if e != nil {
-		return errors.Wrap(e, "error creating subprocess tmpdir")
+	err := os.MkdirAll(dir, 0755)
+	if err != nil {
+		return errors.Wrap(err, "error creating subprocess tmpdir")
 	}
 	conf := r.getConf()
 	return ioutil.WriteFile(r.getConfFileName(), []byte(conf), 0644)

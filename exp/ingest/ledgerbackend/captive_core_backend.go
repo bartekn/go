@@ -112,9 +112,9 @@ func (c *CaptiveStellarCore) copyLedgerCloseMeta(xlcm *xdr.LedgerCloseMeta, lcm 
 	lcm.LedgerHeader = v0.LedgerHeader
 	envelopes := make(map[xdr.Hash]xdr.TransactionEnvelope)
 	for _, tx := range v0.TxSet.Txs {
-		hash, e := network.HashTransactionInEnvelope(tx, c.networkPassphrase)
-		if e != nil {
-			return errors.Wrap(e, "error hashing tx in LedgerCloseMeta")
+		hash, err := network.HashTransactionInEnvelope(tx, c.networkPassphrase)
+		if err != nil {
+			return errors.Wrap(err, "error hashing tx in LedgerCloseMeta")
 		}
 		envelopes[hash] = tx
 	}
@@ -142,8 +142,8 @@ func (c *CaptiveStellarCore) getLatestCheckpointSequence() (uint32, error) {
 	if err != nil {
 		return 0, errors.Wrap(err, "error connecting to history archive")
 	}
-	has, e := archive.GetRootHAS()
-	if e != nil {
+	has, err := archive.GetRootHAS()
+	if err != nil {
 		return 0, errors.Wrap(err, "error getting root HAS")
 	}
 
