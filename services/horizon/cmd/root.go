@@ -375,6 +375,14 @@ var configOpts = support.ConfigOptions{
 		Required:    false,
 		Usage:       "applies pending migrations before starting horizon",
 	},
+	&support.ConfigOption{
+		Name:        "exp-use-extra-participants-fields",
+		ConfigKey:   &config.UseExtraParticipantsFields,
+		OptType:     types.Bool,
+		FlagDefault: false,
+		Required:    false,
+		Usage:       "makes Horizon use extra fields on hopp table, this is much faster but requires a full history reingestion so it's behind a feature flag",
+	},
 }
 
 func init() {

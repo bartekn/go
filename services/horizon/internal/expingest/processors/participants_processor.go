@@ -25,24 +25,38 @@ func NewParticipantsProcessor(participantsQ history.QParticipants, sequence uint
 	}
 }
 
+type participantTransaction struct {
+	successful bool
+}
+
+type participantOperation struct {
+	successful bool
+	opType     xdr.OperationType
+}
+
 type participant struct {
 	accountID      int64
-	transactionSet map[int64]struct{}
-	operationSet   map[int64]struct{}
+	transactionSet map[int64]participantTransaction
+	operationSet   map[int64]participantOperation
 }
 
-func (p *participant) addTransactionID(id int64) {
+func (p *participant) addTransactionID(id int64, successful bool) {
 	if p.transactionSet == nil {
-		p.transactionSet = map[int64]struct{}{}
+		p.transactionSet = map[int64]participantTransaction{}
 	}
-	p.transactionSet[id] = struct{}{}
+	p.transactionSet[id] = participantTransaction{
+		successful: successful,
+	}
 }
 
-func (p *participant) addOperationID(id int64) {
+func (p *participant) addOperationID(id int64, successful bool, opType xdr.OperationType) {
 	if p.operationSet == nil {
-		p.operationSet = map[int64]struct{}{}
+		p.operationSet = map[int64]participantOperation{}
 	}
-	p.operationSet[id] = struct{}{}
+	p.operationSet[id] = participantOperation{
+		successful: successful,
+		opType:     opType,
+	}
 }
 
 func (p *ParticipantsProcessor) loadAccountIDs(participantSet map[string]participant) error {
@@ -196,7 +210,7 @@ func (p *ParticipantsProcessor) addTransactionParticipants(
 	for _, participant := range transactionParticipants {
 		address := participant.Address()
 		entry := participantSet[address]
-		entry.addTransactionID(transactionID)
+		entry.addTransactionID(transactionID, transaction.Result.Successful())
 		participantSet[address] = entry
 	}
 
@@ -213,11 +227,21 @@ func (p *ParticipantsProcessor) addOperationsParticipants(
 		return errors.Wrap(err, "could not determine operation participants")
 	}
 
-	for operationID, p := range participants {
+	for operationIndex, p := range participants {
+		operationID := toid.New(
+			int32(sequence),
+			int32(transaction.Index),
+			int32(operationIndex+1),
+		).ToInt64()
+
 		for _, participant := range p {
 			address := participant.Address()
 			entry := participantSet[address]
-			entry.addOperationID(operationID)
+			entry.addOperationID(
+				operationID,
+				transaction.Result.Successful(),
+				transaction.Envelope.Operations()[operationIndex].Body.Type,
+			)
 			participantSet[address] = entry
 		}
 	}
@@ -229,8 +253,8 @@ func (p *ParticipantsProcessor) insertDBTransactionParticipants(participantSet m
 	batch := p.participantsQ.NewTransactionParticipantsBatchInsertBuilder(maxBatchSize)
 
 	for _, entry := range participantSet {
-		for transactionID := range entry.transactionSet {
-			if err := batch.Add(transactionID, entry.accountID); err != nil {
+		for transactionID, details := range entry.transactionSet {
+			if err := batch.Add(transactionID, entry.accountID, details.successful); err != nil {
 				return errors.Wrap(err, "Could not insert transaction participant in db")
 			}
 		}
@@ -246,8 +270,8 @@ func (p *ParticipantsProcessor) insertDBOperationsParticipants(participantSet ma
 	batch := p.participantsQ.NewOperationParticipantBatchInsertBuilder(maxBatchSize)
 
 	for _, entry := range participantSet {
-		for operationID := range entry.operationSet {
-			if err := batch.Add(operationID, entry.accountID); err != nil {
+		for operationID, details := range entry.operationSet {
+			if err := batch.Add(operationID, entry.accountID, details.successful, details.opType); err != nil {
 				return errors.Wrap(err, "could not insert operation participant in db")
 			}
 		}

@@ -14,7 +14,7 @@ type QParticipants interface {
 // TransactionParticipantsBatchInsertBuilder is used to insert transaction participants into the
 // history_transaction_participants table
 type TransactionParticipantsBatchInsertBuilder interface {
-	Add(transactionID, accountID int64) error
+	Add(transactionID, accountID int64, successful bool) error
 	Exec() error
 }
 
@@ -33,10 +33,11 @@ func (q *Q) NewTransactionParticipantsBatchInsertBuilder(maxBatchSize int) Trans
 }
 
 // Add adds a new transaction participant to the batch
-func (i *transactionParticipantsBatchInsertBuilder) Add(transactionID, accountID int64) error {
+func (i *transactionParticipantsBatchInsertBuilder) Add(transactionID, accountID int64, successful bool) error {
 	return i.builder.Row(map[string]interface{}{
 		"history_transaction_id": transactionID,
 		"history_account_id":     accountID,
+		"successful":             successful,
 	})
 }
 

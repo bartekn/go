@@ -69,4 +69,8 @@ type Config struct {
 	// ApplyMigrations will apply pending migrations to the horizon database
 	// before starting the horizon service
 	ApplyMigrations bool
+	// UseExtraParticipantsFields makes Horizon use extra fields on hopp table.
+	// This is much faster but requires a full history reingestion so it's behind
+	// a feature flag.
+	UseExtraParticipantsFields bool
 }

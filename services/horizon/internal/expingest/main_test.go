@@ -343,7 +343,7 @@ func (m *mockDBQ) NewTransactionParticipantsBatchInsertBuilder(maxBatchSize int)
 
 func (m *mockDBQ) NewOperationParticipantBatchInsertBuilder(maxBatchSize int) history.OperationParticipantBatchInsertBuilder {
 	args := m.Called(maxBatchSize)
-	return args.Get(0).(history.TransactionParticipantsBatchInsertBuilder)
+	return args.Get(0).(history.OperationParticipantBatchInsertBuilder)
 }
 
 func (m *mockDBQ) NewTradeBatchInsertBuilder(maxBatchSize int) history.TradeBatchInsertBuilder {

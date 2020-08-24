@@ -31,16 +31,17 @@ type RouterConfig struct {
 	TxSubmitter *txsub.System
 	RateQuota   *throttled.RateQuota
 
-	SSEUpdateFrequency time.Duration
-	StaleThreshold     uint
-	ConnectionTimeout  time.Duration
-	NetworkPassphrase  string
-	MaxPathLength      uint
-	PathFinder         paths.Finder
-	PrometheusRegistry *prometheus.Registry
-	CoreGetter         actions.CoreSettingsGetter
-	HorizonVersion     string
-	FriendbotURL       *url.URL
+	SSEUpdateFrequency           time.Duration
+	StaleThreshold               uint
+	ConnectionTimeout            time.Duration
+	NetworkPassphrase            string
+	MaxPathLength                uint
+	PathFinder                   paths.Finder
+	PrometheusRegistry           *prometheus.Registry
+	CoreGetter                   actions.CoreSettingsGetter
+	HorizonVersion               string
+	FriendbotURL                 *url.URL
+	UseDBExtraParticipantsFields bool
 }
 
 type Router struct {
@@ -183,10 +184,12 @@ func (r *Router) addRoutes(config *RouterConfig, rateLimiter *throttled.HTTPRate
 		r.Use(historyMiddleware)
 		r.Method(http.MethodGet, "/accounts/{account_id:\\w+}/effects", streamableHistoryPageHandler(actions.GetEffectsHandler{}, streamHandler))
 		r.Method(http.MethodGet, "/accounts/{account_id:\\w+}/operations", streamableHistoryPageHandler(actions.GetOperationsHandler{
-			OnlyPayments: false,
+			OnlyPayments:                 false,
+			UseDBExtraParticipantsFields: config.UseDBExtraParticipantsFields,
 		}, streamHandler))
 		r.Method(http.MethodGet, "/accounts/{account_id:\\w+}/payments", streamableHistoryPageHandler(actions.GetOperationsHandler{
-			OnlyPayments: true,
+			OnlyPayments:                 true,
+			UseDBExtraParticipantsFields: config.UseDBExtraParticipantsFields,
 		}, streamHandler))
 		r.Method(http.MethodGet, "/accounts/{account_id:\\w+}/trades", streamableHistoryPageHandler(actions.GetTradesHandler{}, streamHandler))
 		r.Method(http.MethodGet, "/accounts/{account_id:\\w+}/transactions", streamableHistoryPageHandler(actions.GetTransactionsHandler{}, streamHandler))

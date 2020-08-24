@@ -21,7 +21,7 @@ func TestOperationQueries(t *testing.T) {
 	tt.Assert.Nil(transaction)
 
 	// Test Operations()
-	ops, transactions, err := q.Operations().
+	ops, transactions, err := q.Operations(false).
 		ForAccount("GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON").
 		Fetch()
 	if tt.Assert.NoError(err) {
@@ -30,7 +30,7 @@ func TestOperationQueries(t *testing.T) {
 	tt.Assert.Len(transactions, 0)
 
 	// ledger filter works
-	ops, transactions, err = q.Operations().ForLedger(2).Fetch()
+	ops, transactions, err = q.Operations(false).ForLedger(2).Fetch()
 	if tt.Assert.NoError(err) {
 		tt.Assert.Len(ops, 3)
 	}
@@ -38,7 +38,7 @@ func TestOperationQueries(t *testing.T) {
 
 	// tx filter works
 	hash := "2374e99349b9ef7dba9a5db3339b78fda8f34777b1af33ba468ad5c0df946d4d"
-	ops, transactions, err = q.Operations().ForTransaction(hash).Fetch()
+	ops, transactions, err = q.Operations(false).ForTransaction(hash).Fetch()
 	if tt.Assert.NoError(err) {
 		tt.Assert.Len(ops, 1)
 	}
@@ -46,7 +46,7 @@ func TestOperationQueries(t *testing.T) {
 
 	// payment filter works
 	tt.Scenario("pathed_payment")
-	ops, transactions, err = q.Operations().OnlyPayments().Fetch()
+	ops, transactions, err = q.Operations(false).OnlyPayments().Fetch()
 	if tt.Assert.NoError(err) {
 		tt.Assert.Len(ops, 10)
 	}
@@ -54,7 +54,7 @@ func TestOperationQueries(t *testing.T) {
 
 	// payment filter includes account merges
 	tt.Scenario("account_merge")
-	ops, transactions, err = q.Operations().OnlyPayments().Fetch()
+	ops, transactions, err = q.Operations(false).OnlyPayments().Fetch()
 	if tt.Assert.NoError(err) {
 		tt.Assert.Len(ops, 3)
 	}
@@ -66,7 +66,7 @@ func TestOperationQueryBuilder(t *testing.T) {
 	defer tt.Finish()
 	q := &Q{tt.HorizonSession()}
 
-	opsQ := q.Operations().ForAccount("GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON").Page(db2.PageQuery{Cursor: "8589938689", Order: "asc", Limit: 10})
+	opsQ := q.Operations(false).ForAccount("GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON").Page(db2.PageQuery{Cursor: "8589938689", Order: "asc", Limit: 10})
 	tt.Assert.NoError(opsQ.Err)
 	got, _, err := opsQ.sql.ToSql()
 	tt.Assert.NoError(err)
@@ -75,7 +75,7 @@ func TestOperationQueryBuilder(t *testing.T) {
 	want := "SELECT hop.id, hop.transaction_id, hop.application_order, hop.type, hop.details, hop.source_account, ht.transaction_hash, ht.tx_result, COALESCE(ht.successful, true) as transaction_successful FROM history_operations hop LEFT JOIN history_transactions ht ON ht.id = hop.transaction_id JOIN history_operation_participants hopp ON hopp.history_operation_id = hop.id WHERE hopp.history_account_id = ? AND hopp.history_operation_id > ? ORDER BY hopp.history_operation_id asc LIMIT 10"
 	tt.Assert.EqualValues(want, got)
 
-	opsQ = q.Operations().ForLedger(2).Page(db2.PageQuery{Cursor: "8589938689", Order: "asc", Limit: 10})
+	opsQ = q.Operations(false).ForLedger(2).Page(db2.PageQuery{Cursor: "8589938689", Order: "asc", Limit: 10})
 	tt.Assert.NoError(opsQ.Err)
 	got, _, err = opsQ.sql.ToSql()
 	tt.Assert.NoError(err)
@@ -94,7 +94,7 @@ func TestOperationSuccessfulOnly(t *testing.T) {
 	defer tt.Finish()
 
 	q := &Q{tt.HorizonSession()}
-	query := q.Operations().
+	query := q.Operations(false).
 		ForAccount("GA5WBPYA5Y4WAEHXWR2UKO2UO4BUGHUQ74EUPKON2QHV4WRHOIRNKKH2")
 
 	operations, transactions, err := query.Fetch()
@@ -119,7 +119,7 @@ func TestOperationIncludeFailed(t *testing.T) {
 	defer tt.Finish()
 
 	q := &Q{tt.HorizonSession()}
-	query := q.Operations().
+	query := q.Operations(false).
 		ForAccount("GA5WBPYA5Y4WAEHXWR2UKO2UO4BUGHUQ74EUPKON2QHV4WRHOIRNKKH2").
 		IncludeFailed()
 
@@ -153,7 +153,7 @@ func TestPaymentsSuccessfulOnly(t *testing.T) {
 	defer tt.Finish()
 
 	q := &Q{tt.HorizonSession()}
-	query := q.Operations().
+	query := q.Operations(false).
 		OnlyPayments().
 		ForAccount("GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON")
 
@@ -179,7 +179,7 @@ func TestPaymentsIncludeFailed(t *testing.T) {
 	defer tt.Finish()
 
 	q := &Q{tt.HorizonSession()}
-	query := q.Operations().
+	query := q.Operations(false).
 		OnlyPayments().
 		ForAccount("GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON").
 		IncludeFailed()
@@ -216,7 +216,7 @@ func TestExtraChecksOperationsTransactionSuccessfulTrueResultFalse(t *testing.T)
 	tt.Require.NoError(err)
 
 	q := &Q{tt.HorizonSession()}
-	query := q.Operations().
+	query := q.Operations(false).
 		ForAccount("GA5WBPYA5Y4WAEHXWR2UKO2UO4BUGHUQ74EUPKON2QHV4WRHOIRNKKH2").
 		IncludeFailed()
 
@@ -236,7 +236,7 @@ func TestExtraChecksOperationsTransactionSuccessfulFalseResultTrue(t *testing.T)
 	tt.Require.NoError(err)
 
 	q := &Q{tt.HorizonSession()}
-	query := q.Operations().
+	query := q.Operations(false).
 		ForAccount("GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON").
 		IncludeFailed()
 
@@ -260,7 +260,7 @@ func TestOperationIncludeTransactions(t *testing.T) {
 	accountID := "GA5WBPYA5Y4WAEHXWR2UKO2UO4BUGHUQ74EUPKON2QHV4WRHOIRNKKH2"
 
 	q := &Q{tt.HorizonSession()}
-	query := q.Operations().
+	query := q.Operations(false).
 		IncludeTransactions().
 		ForAccount(accountID)
 
@@ -275,7 +275,7 @@ func TestOperationIncludeTransactions(t *testing.T) {
 		assertOperationMatchesTransaction(tt, operation, transaction)
 	}
 
-	withoutTransactionsQuery := (&Q{tt.HorizonSession()}).Operations().
+	withoutTransactionsQuery := (&Q{tt.HorizonSession()}).Operations(false).
 		ForAccount(accountID)
 
 	var expectedTransactions []Transaction
@@ -317,7 +317,7 @@ func TestValidateTransactionForOperation(t *testing.T) {
 	accountID := "GA5WBPYA5Y4WAEHXWR2UKO2UO4BUGHUQ74EUPKON2QHV4WRHOIRNKKH2"
 
 	q := &Q{tt.HorizonSession()}
-	query := q.Operations().
+	query := q.Operations(false).
 		IncludeTransactions().
 		ForAccount(accountID)
 
@@ -334,7 +334,7 @@ func TestValidateTransactionForOperation(t *testing.T) {
 			"ht.transaction_hash, " +
 			"COALESCE(ht.successful, true) as successful").
 		From("history_transactions ht")
-	query = q.Operations().
+	query = q.Operations(false).
 		IncludeTransactions().
 		ForAccount(accountID)
 
@@ -351,7 +351,7 @@ func TestValidateTransactionForOperation(t *testing.T) {
 			"ht.tx_result, " +
 			"COALESCE(ht.successful, true) as successful").
 		From("history_transactions ht")
-	query = q.Operations().
+	query = q.Operations(false).
 		IncludeTransactions().
 		ForAccount(accountID)
 
@@ -368,7 +368,7 @@ func TestValidateTransactionForOperation(t *testing.T) {
 			"ht.tx_result, " +
 			"ht.transaction_hash").
 		From("history_transactions ht")
-	query = q.Operations().
+	query = q.Operations(false).
 		IncludeTransactions().
 		ForAccount(accountID)
 

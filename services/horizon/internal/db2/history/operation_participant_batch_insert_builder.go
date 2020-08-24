@@ -2,15 +2,13 @@ package history
 
 import (
 	"github.com/stellar/go/support/db"
+	"github.com/stellar/go/xdr"
 )
 
 // OperationParticipantBatchInsertBuilder is used to insert a transaction's operations into the
 // history_operations table
 type OperationParticipantBatchInsertBuilder interface {
-	Add(
-		operationID int64,
-		accountID int64,
-	) error
+	Add(operationID, accountID int64, successful bool, opType xdr.OperationType) error
 	Exec() error
 }
 
@@ -31,12 +29,14 @@ func (q *Q) NewOperationParticipantBatchInsertBuilder(maxBatchSize int) Operatio
 
 // Add adds an operation participant to the batch
 func (i *operationParticipantBatchInsertBuilder) Add(
-	operationID int64,
-	accountID int64,
+	operationID, accountID int64, successful bool, opType xdr.OperationType,
 ) error {
+	payment := isPaymentFamilyOperation(opType)
 	return i.builder.Row(map[string]interface{}{
 		"history_operation_id": operationID,
 		"history_account_id":   accountID,
+		"successful":           successful,
+		"payment":              payment,
 	})
 }
 

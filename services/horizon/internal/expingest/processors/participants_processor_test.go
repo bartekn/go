@@ -98,33 +98,33 @@ func (s *ParticipantsProcessorTestSuiteLedger) TearDownTest() {
 
 func (s *ParticipantsProcessorTestSuiteLedger) mockSuccessfulTransactionBatchAdds() {
 	s.mockBatchInsertBuilder.On(
-		"Add", s.firstTxID, s.addressToID[s.addresses[0]],
+		"Add", s.firstTxID, s.addressToID[s.addresses[0]], true,
 	).Return(nil).Once()
 
 	s.mockBatchInsertBuilder.On(
-		"Add", s.secondTxID, s.addressToID[s.addresses[1]],
+		"Add", s.secondTxID, s.addressToID[s.addresses[1]], true,
 	).Return(nil).Once()
 	s.mockBatchInsertBuilder.On(
-		"Add", s.secondTxID, s.addressToID[s.addresses[2]],
+		"Add", s.secondTxID, s.addressToID[s.addresses[2]], true,
 	).Return(nil).Once()
 
 	s.mockBatchInsertBuilder.On(
-		"Add", s.thirdTxID, s.addressToID[s.addresses[0]],
+		"Add", s.thirdTxID, s.addressToID[s.addresses[0]], true,
 	).Return(nil).Once()
 }
 
 func (s *ParticipantsProcessorTestSuiteLedger) mockSuccessfulOperationBatchAdds() {
 	s.mockOperationsBatchInsertBuilder.On(
-		"Add", s.firstTxID+1, s.addressToID[s.addresses[0]],
+		"Add", s.firstTxID+1, s.addressToID[s.addresses[0]], true, xdr.OperationTypeBumpSequence,
 	).Return(nil).Once()
 	s.mockOperationsBatchInsertBuilder.On(
-		"Add", s.secondTxID+1, s.addressToID[s.addresses[1]],
+		"Add", s.secondTxID+1, s.addressToID[s.addresses[1]], true, xdr.OperationTypeCreateAccount,
 	).Return(nil).Once()
 	s.mockOperationsBatchInsertBuilder.On(
-		"Add", s.secondTxID+1, s.addressToID[s.addresses[2]],
+		"Add", s.secondTxID+1, s.addressToID[s.addresses[2]], true, xdr.OperationTypeCreateAccount,
 	).Return(nil).Once()
 	s.mockOperationsBatchInsertBuilder.On(
-		"Add", s.thirdTxID+1, s.addressToID[s.addresses[0]],
+		"Add", s.thirdTxID+1, s.addressToID[s.addresses[0]], true, xdr.OperationTypeBumpSequence,
 	).Return(nil).Once()
 }
 func (s *ParticipantsProcessorTestSuiteLedger) TestEmptyParticipants() {
@@ -181,10 +181,10 @@ func (s *ParticipantsProcessorTestSuiteLedger) TestFeeBumptransaction() {
 		Return(s.mockOperationsBatchInsertBuilder).Once()
 
 	s.mockBatchInsertBuilder.On(
-		"Add", feeBumpTxID, addressToID[addresses[0]],
+		"Add", feeBumpTxID, addressToID[addresses[0]], true,
 	).Return(nil).Once()
 	s.mockBatchInsertBuilder.On(
-		"Add", feeBumpTxID, addressToID[addresses[1]],
+		"Add", feeBumpTxID, addressToID[addresses[1]], true,
 	).Return(nil).Once()
 
 	s.mockBatchInsertBuilder.On("Exec").Return(nil).Once()
@@ -246,18 +246,18 @@ func (s *ParticipantsProcessorTestSuiteLedger) TestBatchAddFails() {
 		Return(s.mockBatchInsertBuilder).Once()
 
 	s.mockBatchInsertBuilder.On(
-		"Add", s.firstTxID, s.addressToID[s.addresses[0]],
+		"Add", s.firstTxID, s.addressToID[s.addresses[0]], true,
 	).Return(errors.New("transient error")).Once()
 
 	s.mockBatchInsertBuilder.On(
-		"Add", s.secondTxID, s.addressToID[s.addresses[1]],
+		"Add", s.secondTxID, s.addressToID[s.addresses[1]], true,
 	).Return(nil).Maybe()
 	s.mockBatchInsertBuilder.On(
-		"Add", s.secondTxID, s.addressToID[s.addresses[2]],
+		"Add", s.secondTxID, s.addressToID[s.addresses[2]], true,
 	).Return(nil).Maybe()
 
 	s.mockBatchInsertBuilder.On(
-		"Add", s.thirdTxID, s.addressToID[s.addresses[0]],
+		"Add", s.thirdTxID, s.addressToID[s.addresses[0]], true,
 	).Return(nil).Maybe()
 	for _, tx := range s.txs {
 		err := s.processor.ProcessTransaction(tx)
@@ -284,16 +284,16 @@ func (s *ParticipantsProcessorTestSuiteLedger) TestOperationParticipantsBatchAdd
 	s.mockSuccessfulTransactionBatchAdds()
 
 	s.mockOperationsBatchInsertBuilder.On(
-		"Add", s.firstTxID+1, s.addressToID[s.addresses[0]],
+		"Add", s.firstTxID+1, s.addressToID[s.addresses[0]], true, xdr.OperationTypeBumpSequence,
 	).Return(errors.New("transient error")).Once()
 	s.mockOperationsBatchInsertBuilder.On(
-		"Add", s.secondTxID+1, s.addressToID[s.addresses[1]],
+		"Add", s.secondTxID+1, s.addressToID[s.addresses[1]], true, xdr.OperationTypeCreateAccount,
 	).Return(nil).Maybe()
 	s.mockOperationsBatchInsertBuilder.On(
-		"Add", s.secondTxID+1, s.addressToID[s.addresses[2]],
+		"Add", s.secondTxID+1, s.addressToID[s.addresses[2]], true, xdr.OperationTypeCreateAccount,
 	).Return(nil).Maybe()
 	s.mockOperationsBatchInsertBuilder.On(
-		"Add", s.thirdTxID+1, s.addressToID[s.addresses[0]],
+		"Add", s.thirdTxID+1, s.addressToID[s.addresses[0]], true, xdr.OperationTypeBumpSequence,
 	).Return(nil).Maybe()
 
 	s.mockBatchInsertBuilder.On("Exec").Return(nil).Once()

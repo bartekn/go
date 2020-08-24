@@ -71,8 +71,14 @@ func (q *Q) FeeStats(currentSeq int32, dest *FeeStats) error {
 
 // Operations provides a helper to filter the operations table with pre-defined
 // filters.  See `OperationsQ` for the available filters.
-func (q *Q) Operations() *OperationsQ {
+// useExtraParticipantsFields makes OperationsQ to use hopp.successful and
+// hopp.payment fields when querying operations for account. This is much
+// faster but requires a full history reingestion so it's behind a feature
+// flag.
+func (q *Q) Operations(useExtraParticipantsFields bool) *OperationsQ {
 	query := &OperationsQ{
+		UseExtraParticipantsFields: useExtraParticipantsFields,
+
 		parent:              q,
 		opIdCol:             "hop.id",
 		includeFailed:       false,
@@ -113,6 +119,8 @@ func (q *Q) OperationByID(includeTransactions bool, id int64) (Operation, *Trans
 
 // ForAccount filters the operations collection to a specific account
 func (q *OperationsQ) ForAccount(aid string) *OperationsQ {
+	q.forAccount = true
+
 	var account Account
 	q.Err = q.parent.AccountByAddress(&account, aid)
 	if q.Err != nil {
@@ -171,17 +179,33 @@ func (q *OperationsQ) ForTransaction(hash string) *OperationsQ {
 	return q
 }
 
+var paymentFamilyTypes = []xdr.OperationType{
+	xdr.OperationTypeCreateAccount,
+	xdr.OperationTypePayment,
+	xdr.OperationTypePathPaymentStrictReceive,
+	xdr.OperationTypePathPaymentStrictSend,
+	xdr.OperationTypeAccountMerge,
+}
+
+func isPaymentFamilyOperation(typ xdr.OperationType) bool {
+	for _, opType := range paymentFamilyTypes {
+		if typ == opType {
+			return true
+		}
+	}
+
+	return false
+}
+
 // OnlyPayments filters the query being built to only include operations that
 // are in the "payment" class of operations:  CreateAccountOps, Payments, and
 // PathPayments.
 func (q *OperationsQ) OnlyPayments() *OperationsQ {
-	q.sql = q.sql.Where(sq.Eq{"hop.type": []xdr.OperationType{
-		xdr.OperationTypeCreateAccount,
-		xdr.OperationTypePayment,
-		xdr.OperationTypePathPaymentStrictReceive,
-		xdr.OperationTypePathPaymentStrictSend,
-		xdr.OperationTypeAccountMerge,
-	}})
+	if q.UseExtraParticipantsFields && q.forAccount {
+		q.sql = q.sql.Where("hopp.payment = true")
+	} else {
+		q.sql = q.sql.Where(sq.Eq{"hop.type": paymentFamilyTypes})
+	}
 	return q
 }
 
@@ -214,15 +238,19 @@ func (q *OperationsQ) Fetch() ([]Operation, []Transaction, error) {
 	}
 
 	if !q.includeFailed {
-		q.sql = q.sql.
-			Where("(ht.successful = true OR ht.successful IS NULL)")
+		if q.UseExtraParticipantsFields && q.forAccount {
+			q.sql = q.sql.Where("hopp.successful = true")
+		} else {
+			q.sql = q.sql.
+				Where("(ht.successful = true OR ht.successful IS NULL)")
+		}
 	}
 
 	var operations []Operation
 	var transactions []Transaction
-	q.Err = q.parent.Select(&operations, q.sql)
-	if q.Err != nil {
-		return nil, nil, q.Err
+	err := q.parent.Select(&operations, q.sql)
+	if err != nil {
+		return nil, nil, err
 	}
 	set := map[int64]bool{}
 	transactionIDs := []int64{}

@@ -447,19 +447,20 @@ func (a *App) init() error {
 	initTxSubMetrics(a)
 
 	webConfig := &httpx.RouterConfig{
-		DBSession:          a.historyQ.Session,
-		TxSubmitter:        a.submitter,
-		RateQuota:          a.config.RateQuota,
-		SSEUpdateFrequency: a.config.SSEUpdateFrequency,
-		StaleThreshold:     a.config.StaleThreshold,
-		ConnectionTimeout:  a.config.ConnectionTimeout,
-		NetworkPassphrase:  a.config.NetworkPassphrase,
-		MaxPathLength:      a.config.MaxPathLength,
-		PathFinder:         a.paths,
-		PrometheusRegistry: a.prometheusRegistry,
-		CoreGetter:         a,
-		HorizonVersion:     a.horizonVersion,
-		FriendbotURL:       a.config.FriendbotURL,
+		DBSession:                    a.historyQ.Session,
+		TxSubmitter:                  a.submitter,
+		RateQuota:                    a.config.RateQuota,
+		SSEUpdateFrequency:           a.config.SSEUpdateFrequency,
+		StaleThreshold:               a.config.StaleThreshold,
+		ConnectionTimeout:            a.config.ConnectionTimeout,
+		NetworkPassphrase:            a.config.NetworkPassphrase,
+		MaxPathLength:                a.config.MaxPathLength,
+		PathFinder:                   a.paths,
+		PrometheusRegistry:           a.prometheusRegistry,
+		CoreGetter:                   a,
+		HorizonVersion:               a.horizonVersion,
+		FriendbotURL:                 a.config.FriendbotURL,
+		UseDBExtraParticipantsFields: a.config.UseExtraParticipantsFields,
 	}
 
 	var err error

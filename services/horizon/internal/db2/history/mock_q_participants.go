@@ -31,8 +31,8 @@ type MockTransactionParticipantsBatchInsertBuilder struct {
 	mock.Mock
 }
 
-func (m *MockTransactionParticipantsBatchInsertBuilder) Add(transactionID, accountID int64) error {
-	a := m.Called(transactionID, accountID)
+func (m *MockTransactionParticipantsBatchInsertBuilder) Add(transactionID, accountID int64, successful bool) error {
+	a := m.Called(transactionID, accountID, successful)
 	return a.Error(0)
 }
 

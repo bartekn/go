@@ -396,8 +396,8 @@ func dedupe(in []xdr.AccountId) (out []xdr.AccountId) {
 }
 
 // OperationsParticipants returns a map with all participants per operation
-func operationsParticipants(transaction io.LedgerTransaction, sequence uint32) (map[int64][]xdr.AccountId, error) {
-	participants := map[int64][]xdr.AccountId{}
+func operationsParticipants(transaction io.LedgerTransaction, sequence uint32) (map[uint32][]xdr.AccountId, error) {
+	participants := map[uint32][]xdr.AccountId{}
 
 	for opi, op := range transaction.Envelope.Operations() {
 		operation := transactionOperationWrapper{
@@ -411,7 +411,7 @@ func operationsParticipants(transaction io.LedgerTransaction, sequence uint32) (
 		if err != nil {
 			return participants, errors.Wrapf(err, "reading operation %v participants", operation.ID())
 		}
-		participants[operation.ID()] = p
+		participants[uint32(opi)] = p
 	}
 
 	return participants, nil

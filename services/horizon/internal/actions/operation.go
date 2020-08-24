@@ -59,7 +59,8 @@ func (qp OperationsQuery) Validate() error {
 
 // GetOperationsHandler is the action handler for all end-points returning a list of operations.
 type GetOperationsHandler struct {
-	OnlyPayments bool
+	OnlyPayments                 bool
+	UseDBExtraParticipantsFields bool
 }
 
 // GetResourcePage returns a page of operations.
@@ -87,7 +88,7 @@ func (handler GetOperationsHandler) GetResourcePage(w HeaderWriter, r *http.Requ
 		return nil, err
 	}
 
-	query := historyQ.Operations()
+	query := historyQ.Operations(handler.UseDBExtraParticipantsFields)
 
 	switch {
 	case qp.AccountID != "":

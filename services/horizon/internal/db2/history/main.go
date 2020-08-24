@@ -456,9 +456,16 @@ type offersBatchInsertBuilder struct {
 // OperationsQ is a helper struct to aid in configuring queries that loads
 // slices of Operation structs.
 type OperationsQ struct {
+	// UseExtraParticipantsFields makes OperationsQ to use hopp.successful and
+	// hopp.payment fields when querying operations for account. This is much
+	// faster but requires a full history reingestion so it's behind a feature
+	// flag.
+	UseExtraParticipantsFields bool
+
 	Err                 error
 	parent              *Q
 	sql                 sq.SelectBuilder
+	forAccount          bool
 	opIdCol             string
 	includeFailed       bool
 	includeTransactions bool

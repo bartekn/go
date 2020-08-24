@@ -728,13 +728,13 @@ func TestFetchFeeBumpTransaction(t *testing.T) {
 	tt.Assert.Equal(byOuterhash, byInnerHash)
 	tt.Assert.Equal(byOuterhash, fixture.Transaction)
 
-	outerOps, outerTransactions, err := q.Operations().IncludeTransactions().
+	outerOps, outerTransactions, err := q.Operations(false).IncludeTransactions().
 		ForTransaction(fixture.OuterHash).Fetch()
 	tt.Assert.NoError(err)
 	tt.Assert.Len(outerTransactions, 1)
 	tt.Assert.Len(outerOps, 1)
 
-	innerOps, innerTransactions, err := q.Operations().IncludeTransactions().
+	innerOps, innerTransactions, err := q.Operations(false).IncludeTransactions().
 		ForTransaction(fixture.InnerHash).Fetch()
 	tt.Assert.NoError(err)
 	tt.Assert.Len(innerTransactions, 1)
