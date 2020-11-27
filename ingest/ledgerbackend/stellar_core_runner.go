@@ -26,10 +26,15 @@ type stellarCoreRunnerInterface interface {
 	getProcessExitChan() <-chan struct{}
 	// getProcessExitError returns an exit error of the process, can be nil
 	getProcessExitError() error
+	// getProcessExitUserInitiated returns true if process exit was initiated by
+	// an user.
+	getProcessExitUserInitiated() bool
 	setLogger(*log.Entry)
 	close() error
 }
 
+// stellarCoreRunner is a helper for starting stellar-core. Should be used only
+// once, for multiple runs create separate instances.
 type stellarCoreRunner struct {
 	executablePath    string
 	configPath        string
@@ -44,11 +49,12 @@ type stellarCoreRunner struct {
 
 	// processExit channel receives an error when the process exited with an error
 	// or nil if the process exited without an error.
-	processExit      chan struct{}
-	processExitError error
-	metaPipe         io.Reader
-	tempDir          string
-	nonce            string
+	processExit              chan struct{}
+	processExitError         error
+	processExitUserInitiated bool
+	metaPipe                 io.Reader
+	tempDir                  string
+	nonce                    string
 
 	// Optionally, logging can be done to something other than stdout.
 	Log *log.Entry
@@ -269,11 +275,17 @@ func (r *stellarCoreRunner) getProcessExitError() error {
 	return r.processExitError
 }
 
+func (r *stellarCoreRunner) getProcessExitUserInitiated() bool {
+	return r.processExitUserInitiated
+}
+
 func (r *stellarCoreRunner) setLogger(logger *log.Entry) {
 	r.Log = logger
 }
 
 func (r *stellarCoreRunner) close() error {
+	r.processExitUserInitiated = true
+
 	var err1, err2 error
 
 	if r.processIsAlive() {

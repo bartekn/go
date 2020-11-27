@@ -1,6 +1,7 @@
 package ledgerbackend
 
 import (
+	"context"
 	"encoding/hex"
 	"time"
 
@@ -367,6 +368,8 @@ func (c *CaptiveStellarCore) runFromParams(from uint32) (runFrom uint32, ledgerH
 //     it normally (including connecting to the Stellar network).
 // Please note that using a BoundedRange, currently, requires a full-trust on
 // history archive. This issue is being fixed in Stellar-Core.
+//
+// Returns `context.Cancelled` if `Close` was called from another Go routine.
 func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 	// Range already prepared
 	if prepared, err := c.IsPrepared(ledgerRange); err != nil {
@@ -388,7 +391,10 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 	for {
 		select {
 		case <-c.stellarCoreRunner.getProcessExitChan():
-			return wrapStellarCoreRunnerError(c.stellarCoreRunner)
+			if !c.stellarCoreRunner.getProcessExitUserInitiated() {
+				return wrapStellarCoreRunnerError(c.stellarCoreRunner)
+			}
+			return context.Canceled
 		default:
 		}
 		// Wait for the first ledger or an error
@@ -453,6 +459,8 @@ func (*CaptiveStellarCore) isPrepared(nextLedger, lastLedger, cachedLedger uint3
 //   * UnboundedRange makes GetLedger non-blocking. The method will return with
 //     the first argument equal false.
 // This is done to provide maximum performance when streaming old ledgers.
+//
+// Returns `context.Cancelled` if `Close` was called from another Go routine.
 func (c *CaptiveStellarCore) GetLedger(sequence uint32) (bool, xdr.LedgerCloseMeta, error) {
 	if c.cachedMeta != nil && sequence == c.cachedMeta.LedgerSequence() {
 		// GetLedger can be called multiple times using the same sequence, ex. to create
@@ -492,7 +500,11 @@ loop:
 		// in bufferedLedgerMetaReader (will send an error to the channel).
 		result := <-c.ledgerBuffer.getChannel()
 		if result.err != nil {
-			errOut = result.err
+			if !c.stellarCoreRunner.getProcessExitUserInitiated() {
+				errOut = result.err
+			} else {
+				errOut = context.Canceled
+			}
 			break loop
 		}
 
@@ -572,7 +584,6 @@ func (c *CaptiveStellarCore) Close() error {
 		// Closing stellarCoreRunner will automatically close bufferedLedgerMetaReader
 		// because it's listening for getProcessExitChan().
 		err := c.stellarCoreRunner.close()
-		c.stellarCoreRunner = nil
 		if err != nil {
 			return errors.Wrap(err, "error closing stellar-core subprocess")
 		}
@@ -581,7 +592,6 @@ func (c *CaptiveStellarCore) Close() error {
 		if c.ledgerBuffer != nil {
 			// Wait for bufferedLedgerMetaReader go routine to return.
 			c.ledgerBuffer.waitForClose()
-			c.ledgerBuffer = nil
 		}
 	}
 

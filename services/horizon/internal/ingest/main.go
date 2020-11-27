@@ -497,10 +497,19 @@ func (s *system) updateCursor(ledgerSequence uint32) error {
 
 func (s *system) Shutdown() {
 	log.Info("Shutting down ingestion system...")
+
 	s.stateVerificationMutex.Lock()
-	defer s.stateVerificationMutex.Unlock()
 	if s.stateVerificationRunning {
 		log.Info("Shutting down state verifier...")
+	}
+	s.stateVerificationMutex.Unlock()
+
+	if s.ledgerBackend != nil {
+		log.Info("Shutting down ledger backend...")
+		err := s.ledgerBackend.Close()
+		if err != nil {
+			log.WithError(err).Error("Error shutting down ledger backend...")
+		}
 	}
 	s.cancel()
 }
