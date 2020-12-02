@@ -232,6 +232,9 @@ func TestCaptivePrepareRangeCrash(t *testing.T) {
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
 	assert.EqualError(t, err, "stellar-core process exited with an error: exit code -1")
+
+	err = captiveBackend.Close()
+	assert.NoError(t, err)
 }
 
 func TestCaptivePrepareRangeUnexpectedExitBounded(t *testing.T) {
@@ -261,6 +264,9 @@ func TestCaptivePrepareRangeUnexpectedExitBounded(t *testing.T) {
 	}
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
+	assert.NoError(t, err)
+
+	err = captiveBackend.Close()
 	assert.NoError(t, err)
 }
 
@@ -301,6 +307,9 @@ func TestCaptivePrepareRangeUnexpectedExitUnbounded(t *testing.T) {
 
 	err := captiveBackend.PrepareRange(UnboundedRange(128))
 	assert.EqualError(t, err, "stellar-core process exited unexpectedly without an error")
+
+	err = captiveBackend.Close()
+	assert.NoError(t, err)
 }
 
 func TestCaptivePrepareRangeUserCancel(t *testing.T) {
@@ -332,6 +341,9 @@ func TestCaptivePrepareRangeUserCancel(t *testing.T) {
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
 	assert.Equal(t, err, context.Canceled)
+
+	err = captiveBackend.Close()
+	assert.NoError(t, err)
 }
 
 func TestCaptivePrepareRange_ErrClosingSession(t *testing.T) {
@@ -367,6 +379,9 @@ func TestCaptivePrepareRange_ErrGettingRootHAS(t *testing.T) {
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
 	assert.EqualError(t, err, "opening subprocess: error getting latest checkpoint sequence: error getting root HAS: transient error")
+
+	err = captiveBackend.Close()
+	assert.NoError(t, err)
 }
 
 func TestCaptivePrepareRange_FromIsAheadOfRootHAS(t *testing.T) {
@@ -390,6 +405,9 @@ func TestCaptivePrepareRange_FromIsAheadOfRootHAS(t *testing.T) {
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
 	assert.EqualError(t, err, "opening subprocess: sequence: 100 is greater than max available in history archives: 64")
+
+	err = captiveBackend.Close()
+	assert.NoError(t, err)
 }
 
 func TestCaptivePrepareRange_ToIsAheadOfRootHAS(t *testing.T) {
@@ -418,6 +436,9 @@ func TestCaptivePrepareRange_ToIsAheadOfRootHAS(t *testing.T) {
 	}
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
+	assert.NoError(t, err)
+
+	err = captiveBackend.Close()
 	assert.NoError(t, err)
 }
 
@@ -469,6 +490,9 @@ func TestCaptivePrepareRangeUnboundedRange_ErrGettingRootHAS(t *testing.T) {
 
 	err := captiveBackend.PrepareRange(UnboundedRange(100))
 	assert.EqualError(t, err, "opening subprocess: error getting latest checkpoint sequence: error getting root HAS: transient error")
+
+	err = captiveBackend.Close()
+	assert.NoError(t, err)
 }
 
 func TestCaptivePrepareRangeUnboundedRange_FromIsTooFarAheadOfLatestHAS(t *testing.T) {
@@ -489,6 +513,9 @@ func TestCaptivePrepareRangeUnboundedRange_FromIsTooFarAheadOfLatestHAS(t *testi
 
 	err := captiveBackend.PrepareRange(UnboundedRange(193))
 	assert.EqualError(t, err, "opening subprocess: trying to start online mode too far (latest checkpoint=64), only two checkpoints in the future allowed")
+
+	err = captiveBackend.Close()
+	assert.NoError(t, err)
 }
 
 func TestCaptivePrepareRangeUnboundedRange_ErrRunFrom(t *testing.T) {
@@ -585,6 +612,9 @@ func TestCaptivePrepareRangeUnboundedRange_ReuseSession(t *testing.T) {
 
 	captiveBackend.nextLedger = 64
 	err = captiveBackend.PrepareRange(UnboundedRange(65))
+	assert.NoError(t, err)
+
+	err = captiveBackend.Close()
 	assert.NoError(t, err)
 }
 
@@ -752,6 +782,9 @@ func TestCaptiveGetLedger_NextLedgerIsDifferentToLedgerFromBuffer(t *testing.T) 
 
 	_, _, err = captiveBackend.GetLedger(66)
 	tt.EqualError(err, "unexpected ledger sequence (expected=66 actual=68)")
+
+	err = captiveBackend.Close()
+	assert.NoError(t, err)
 }
 func TestCaptiveGetLedger_ErrReadingMetaResult(t *testing.T) {
 	tt := assert.New(t)
