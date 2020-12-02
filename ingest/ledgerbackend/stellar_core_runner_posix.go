@@ -37,17 +37,9 @@ func (c *stellarCoreRunner) start() (io.Reader, error) {
 		return readFile, errors.Wrap(err, "error starting stellar-core")
 	}
 
-	c.wg.Add(1)
 	go func() {
-		err := make(chan error, 1)
-		select {
-		case err <- c.cmd.Wait():
-			c.processExitError = <-err
-			close(c.processExit)
-			close(err)
-		case <-c.shutdown:
-		}
-		c.wg.Done()
+		c.tomb.Kill(c.cmd.Wait())
+		c.tomb.Done()
 	}()
 
 	return readFile, nil

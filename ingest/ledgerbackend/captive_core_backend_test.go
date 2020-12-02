@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"golang.org/x/net/context"
+	"gopkg.in/tomb.v1"
 )
 
 // TODO: test frame decoding
@@ -40,19 +41,9 @@ func (m *stellarCoreRunnerMock) getMetaPipe() io.Reader {
 	return a.Get(0).(io.Reader)
 }
 
-func (m *stellarCoreRunnerMock) getProcessExitChan() <-chan struct{} {
+func (m *stellarCoreRunnerMock) getTomb() *tomb.Tomb {
 	a := m.Called()
-	return a.Get(0).(chan struct{})
-}
-
-func (m *stellarCoreRunnerMock) getProcessExitError() error {
-	a := m.Called()
-	return a.Error(0)
-}
-
-func (m *stellarCoreRunnerMock) getProcessExitUserInitiated() bool {
-	a := m.Called()
-	return a.Bool(0)
+	return a.Get(0).(*tomb.Tomb)
 }
 
 func (m *stellarCoreRunnerMock) close() error {
@@ -180,13 +171,15 @@ func TestCaptivePrepareRange(t *testing.T) {
 		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
 	}
 
-	exitChan := make(chan struct{})
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(100), uint32(200)).Return(nil).Once()
-	mockRunner.On("getProcessExitChan").Return(exitChan)
-	mockRunner.On("getProcessExitError").Return(nil)
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
-	mockRunner.On("close").Return(nil).Once()
+	mockRunner.On("close").Run(func(mock.Arguments) {
+		tomb.Kill(nil)
+		tomb.Done()
+	}).Return(nil).Once()
 
 	mockArchive := &historyarchive.MockArchive{}
 	mockArchive.
@@ -205,8 +198,7 @@ func TestCaptivePrepareRange(t *testing.T) {
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
 	assert.NoError(t, err)
-	mockRunner.On("close").Return(nil).Once()
-	close(exitChan)
+
 	err = captiveBackend.Close()
 	assert.NoError(t, err)
 }
@@ -214,13 +206,12 @@ func TestCaptivePrepareRange(t *testing.T) {
 func TestCaptivePrepareRangeCrash(t *testing.T) {
 	var buf bytes.Buffer
 
-	ch := make(chan struct{})
-	close(ch)
+	tomb := &tomb.Tomb{}
+	tomb.Kill(errors.New("exit code -1"))
+	tomb.Done()
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(100), uint32(200)).Return(nil).Once()
-	mockRunner.On("getProcessExitChan").Return(ch)
-	mockRunner.On("getProcessExitError").Return(errors.New("exit code -1"))
-	mockRunner.On("getProcessExitUserInitiated").Return(false)
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil).Once()
 
@@ -240,20 +231,17 @@ func TestCaptivePrepareRangeCrash(t *testing.T) {
 	}
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
-	assert.Error(t, err)
 	assert.EqualError(t, err, "stellar-core process exited with an error: exit code -1")
 }
 
-func TestCaptivePrepareRangeUnexpectedExit(t *testing.T) {
+func TestCaptivePrepareRangeUnexpectedExitBounded(t *testing.T) {
 	var buf bytes.Buffer
 
-	ch := make(chan struct{})
-	close(ch)
+	tomb := &tomb.Tomb{}
+	tomb.Done()
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(100), uint32(200)).Return(nil).Once()
-	mockRunner.On("getProcessExitChan").Return(ch)
-	mockRunner.On("getProcessExitError").Return(nil)
-	mockRunner.On("getProcessExitUserInitiated").Return(false)
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil).Once()
 
@@ -276,16 +264,54 @@ func TestCaptivePrepareRangeUnexpectedExit(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestCaptivePrepareRangeUnexpectedExitUnbounded(t *testing.T) {
+	var buf bytes.Buffer
+
+	for i := 64; i <= 200; i++ {
+		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
+	}
+
+	tomb := &tomb.Tomb{}
+	tomb.Done()
+	mockRunner := &stellarCoreRunnerMock{}
+	mockRunner.On("runFrom", uint32(126), "0000000000000000000000000000000000000000000000000000000000000000").Return(nil).Once()
+	mockRunner.On("getTomb").Return(tomb)
+	mockRunner.On("getMetaPipe").Return(&buf)
+	mockRunner.On("close").Return(nil).Once()
+
+	mockArchive := &historyarchive.MockArchive{}
+	mockArchive.
+		On("GetRootHAS").
+		Return(historyarchive.HistoryArchiveState{
+			CurrentLedger: uint32(127),
+		}, nil)
+
+	mockArchive.
+		On("GetLedgerHeader", uint32(127)).
+		Return(xdr.LedgerHeaderHistoryEntry{}, nil)
+
+	captiveBackend := CaptiveStellarCore{
+		archive:           mockArchive,
+		configPath:        "foo",
+		networkPassphrase: network.PublicNetworkPassphrase,
+		stellarCoreRunnerFactory: func(configPath string) (stellarCoreRunnerInterface, error) {
+			return mockRunner, nil
+		},
+	}
+
+	err := captiveBackend.PrepareRange(UnboundedRange(128))
+	assert.EqualError(t, err, "stellar-core process exited unexpectedly without an error")
+}
+
 func TestCaptivePrepareRangeUserCancel(t *testing.T) {
 	var buf bytes.Buffer
 
-	ch := make(chan struct{})
-	close(ch)
+	tomb := &tomb.Tomb{}
+	tomb.Kill(context.Canceled)
+	tomb.Done()
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(100), uint32(200)).Return(nil).Once()
-	mockRunner.On("getProcessExitChan").Return(ch)
-	mockRunner.On("getProcessExitError").Return(errors.New("signal: killed"))
-	mockRunner.On("getProcessExitUserInitiated").Return(true)
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil).Once()
 
@@ -305,7 +331,6 @@ func TestCaptivePrepareRangeUserCancel(t *testing.T) {
 	}
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
-	assert.Error(t, err)
 	assert.Equal(t, err, context.Canceled)
 }
 
@@ -369,9 +394,11 @@ func TestCaptivePrepareRange_FromIsAheadOfRootHAS(t *testing.T) {
 
 func TestCaptivePrepareRange_ToIsAheadOfRootHAS(t *testing.T) {
 	var buf bytes.Buffer
+
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(100), uint32(192)).Return(nil).Once()
-	mockRunner.On("getProcessExitChan").Return(make(chan struct{}))
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil)
 
@@ -526,11 +553,12 @@ func TestCaptivePrepareRangeUnboundedRange_ReuseSession(t *testing.T) {
 		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
 	}
 
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("runFrom", uint32(62), "0000000000000000000000000000000000000000000000000000000000000000").Return(nil).Once()
 	mockRunner.On("runFrom", uint32(63), "0000000000000000000000000000000000000000000000000000000000000000").Return(nil).Once()
 	mockRunner.On("getMetaPipe").Return(&buf)
-	mockRunner.On("getProcessExitChan").Return(make(chan struct{}))
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("close").Return(nil)
 
 	mockArchive := &historyarchive.MockArchive{}
@@ -567,12 +595,11 @@ func TestGetLatestLedgerSequence(t *testing.T) {
 		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
 	}
 
-	exitChan := make(chan struct{})
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("runFrom", uint32(62), "0000000000000000000000000000000000000000000000000000000000000000").Return(nil).Once()
 	mockRunner.On("getMetaPipe").Return(&buf)
-	mockRunner.On("getProcessExitChan").Return(exitChan)
-	mockRunner.On("getProcessExitError").Return(nil)
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("close").Return(nil).Once()
 
 	mockArchive := &historyarchive.MockArchive{}
@@ -617,9 +644,10 @@ func TestGetLatestLedgerSequence(t *testing.T) {
 	// This should be last read ledger + ledgerReadAheadBufferSize.
 	assert.Equal(t, uint32(64+ledgerReadAheadBufferSize), latest)
 
-	mockRunner.On("close").Return(nil).Once()
-
-	close(exitChan)
+	mockRunner.On("close").Run(func(mock.Arguments) {
+		tomb.Kill(nil)
+		tomb.Done()
+	}).Return(nil).Once()
 
 	err = captiveBackend.Close()
 	assert.NoError(t, err)
@@ -631,9 +659,10 @@ func TestCaptiveGetLedger(t *testing.T) {
 		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
 	}
 
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(65), uint32(66)).Return(nil)
-	mockRunner.On("getProcessExitChan").Return(make(chan struct{}))
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil)
 
@@ -696,9 +725,10 @@ func TestCaptiveGetLedger_NextLedgerIsDifferentToLedgerFromBuffer(t *testing.T) 
 
 	writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(68)})
 
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(65), uint32(66)).Return(nil)
-	mockRunner.On("getProcessExitChan").Return(make(chan struct{}))
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil)
 
@@ -727,10 +757,10 @@ func TestCaptiveGetLedger_ErrReadingMetaResult(t *testing.T) {
 	tt := assert.New(t)
 	var buf bytes.Buffer
 
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(65), uint32(66)).Return(nil)
-	mockRunner.On("getProcessExitChan").Return(make(chan struct{}))
-	mockRunner.On("getProcessExitUserInitiated").Return(false)
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil)
 
@@ -766,9 +796,10 @@ func TestCaptiveGetLedger_ErrClosingAfterLastLedger(t *testing.T) {
 		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
 	}
 
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(65), uint32(66)).Return(nil)
-	mockRunner.On("getProcessExitChan").Return(make(chan struct{}))
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(fmt.Errorf("transient error"))
 
@@ -805,11 +836,10 @@ func TestCaptiveGetLedger_BoundedGetLedgerAfterCoreExit(t *testing.T) {
 		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
 	}
 
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
-	exitChan := make(chan struct{})
 	mockRunner.On("catchup", uint32(65), uint32(70)).Return(nil)
-	mockRunner.On("getProcessExitChan").Return(exitChan)
-	mockRunner.On("getProcessExitError").Return(nil)
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil)
 
@@ -834,7 +864,7 @@ func TestCaptiveGetLedger_BoundedGetLedgerAfterCoreExit(t *testing.T) {
 	waitForLedgersInBuffer(&captiveBackend, 70-64+1)
 
 	// All ledgers from bounded range buffered so Stellar-Core terminates.
-	close(exitChan)
+	tomb.Done()
 
 	for seq := uint32(66); seq <= 70; seq++ {
 		_, _, err = captiveBackend.GetLedger(seq)
@@ -854,11 +884,10 @@ func TestCaptiveGetLedger_CloseBufferFull(t *testing.T) {
 		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
 	}
 
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
-	exitChan := make(chan struct{})
 	mockRunner.On("runFrom", uint32(62), "0000000000000000000000000000000000000000000000000000000000000000").Return(nil).Once()
-	mockRunner.On("getProcessExitChan").Return(exitChan)
-	mockRunner.On("getProcessExitError").Return(nil)
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Return(nil)
 
@@ -887,7 +916,7 @@ func TestCaptiveGetLedger_CloseBufferFull(t *testing.T) {
 	waitForBufferToFill(&captiveBackend)
 
 	// All ledgers from bounded range buffered so Stellar-Core terminates.
-	// close(exitChan)
+	tomb.Done()
 
 	err = captiveBackend.Close()
 	assert.NoError(t, err)
@@ -915,14 +944,13 @@ func TestGetLedgerBoundsCheck(t *testing.T) {
 	writeLedgerHeader(&buf, testLedgerHeader{sequence: 129})
 	writeLedgerHeader(&buf, testLedgerHeader{sequence: 130})
 
+	tomb1 := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
-	exitChan := make(chan struct{})
 	mockRunner.On("catchup", uint32(128), uint32(130)).Return(nil).Once()
-	mockRunner.On("getProcessExitChan").Return(exitChan).Maybe()
-	mockRunner.On("getProcessExitError").Return(nil).Maybe()
+	mockRunner.On("getTomb").Return(tomb1)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Run(func(mock.Arguments) {
-		close(exitChan)
+		tomb1.Done()
 	}).Return(nil).Once()
 
 	mockArchive := &historyarchive.MockArchive{}
@@ -968,14 +996,13 @@ func TestGetLedgerBoundsCheck(t *testing.T) {
 
 	mockRunner.AssertExpectations(t)
 
+	tomb2 := &tomb.Tomb{}
 	mockRunner = &stellarCoreRunnerMock{}
-	exitChan = make(chan struct{})
 	mockRunner.On("catchup", uint32(64), uint32(66)).Return(nil).Once()
-	mockRunner.On("getProcessExitChan").Return(exitChan)
-	mockRunner.On("getProcessExitError").Return(nil).Maybe()
+	mockRunner.On("getTomb").Return(tomb2)
 	mockRunner.On("getMetaPipe").Return(&buf)
 	mockRunner.On("close").Run(func(mock.Arguments) {
-		close(exitChan)
+		tomb2.Done()
 	}).Return(nil).Once()
 
 	captiveBackend = CaptiveStellarCore{
@@ -1002,12 +1029,10 @@ func TestGetLedgerBoundsCheck(t *testing.T) {
 func TestCaptiveGetLedgerUnexpectedExit(t *testing.T) {
 	reader, writer := io.Pipe()
 
-	ch := make(chan struct{})
+	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
 	mockRunner.On("catchup", uint32(64), uint32(100)).Return(nil).Once()
-	mockRunner.On("getProcessExitChan").Return(ch)
-	mockRunner.On("getProcessExitError").Return(nil)
-	mockRunner.On("getProcessExitUserInitiated").Return(false)
+	mockRunner.On("getTomb").Return(tomb)
 	mockRunner.On("getMetaPipe").Return(reader)
 	mockRunner.On("close").Return(nil).Once()
 
@@ -1035,7 +1060,7 @@ func TestCaptiveGetLedgerUnexpectedExit(t *testing.T) {
 	assert.True(t, exists)
 	assert.Equal(t, uint32(64), meta.LedgerSequence())
 
-	close(ch)
+	tomb.Done()
 	writer.Close()
 
 	_, _, err = captiveBackend.GetLedger(65)
@@ -1244,18 +1269,15 @@ func TestCaptivePreviousLedgerCheck(t *testing.T) {
 		archive:           mockArchive,
 		networkPassphrase: network.PublicNetworkPassphrase,
 		stellarCoreRunnerFactory: func(configPath string) (stellarCoreRunnerInterface, error) {
-			ch := make(chan struct{})
-			var closeOnce sync.Once
+			var doneOnce sync.Once
+			tomb := &tomb.Tomb{}
 			mockRunner := &stellarCoreRunnerMock{}
 			mockRunner.On("runFrom", uint32(254), "0101010100000000000000000000000000000000000000000000000000000000").Return(nil).Once()
 			mockRunner.On("getMetaPipe").Return(&buf)
-			mockRunner.On("getProcessExitChan").Return(ch)
-			mockRunner.On("getProcessExitError").Return(nil).Maybe()
+			mockRunner.On("getTomb").Return(tomb)
 			mockRunner.On("close").Run(func(args mock.Arguments) {
-				// Close channel only once
-				closeOnce.Do(func() {
-					close(ch)
-				})
+				// Done only once
+				doneOnce.Do(tomb.Done)
 			}).Return(nil)
 			return mockRunner, nil
 		},

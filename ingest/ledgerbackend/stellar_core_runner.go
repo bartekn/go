@@ -2,6 +2,7 @@ package ledgerbackend
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -11,24 +12,18 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/stellar/go/support/log"
+	"gopkg.in/tomb.v1"
 )
 
 type stellarCoreRunnerInterface interface {
 	catchup(from, to uint32) error
 	runFrom(from uint32, hash string) error
 	getMetaPipe() io.Reader
-	// getProcessExitChan returns a channel that closes on process exit
-	getProcessExitChan() <-chan struct{}
-	// getProcessExitError returns an exit error of the process, can be nil
-	getProcessExitError() error
-	// getProcessExitUserInitiated returns true if process exit was initiated by
-	// an user.
-	getProcessExitUserInitiated() bool
+	getTomb() *tomb.Tomb
 	setLogger(*log.Entry)
 	close() error
 }
@@ -41,20 +36,25 @@ type stellarCoreRunner struct {
 	networkPassphrase string
 	historyURLs       []string
 
-	started  bool
-	wg       sync.WaitGroup
-	shutdown chan struct{}
+	// tomb is used to handle cmd go routine termination. Err() value can be one
+	// of the following:
+	//   - nil: process exit without error, not user initiated (this can be an
+	//       error in layers above if they expect more data but process is done),
+	//   - context.Canceled: process killed after user request,
+	//   - not nil: process exit with an error.
+	//
+	// tomb is created when a new cmd go routine starts.
+	tomb *tomb.Tomb
 
 	cmd *exec.Cmd
 
-	// processExit channel receives an error when the process exited with an error
-	// or nil if the process exited without an error.
-	processExit              chan struct{}
-	processExitError         error
-	processExitUserInitiated bool
-	metaPipe                 io.Reader
-	tempDir                  string
-	nonce                    string
+	// There's a gotcha! When cmd.Wait() signal was received it doesn't mean that
+	// all ledgers have been read from meta pipe. Turns out that OS actually
+	// maintains a buffer. So don't rely on this. Keep reading until EOF is
+	// returned.
+	metaPipe io.Reader
+	tempDir  string
+	nonce    string
 
 	// Optionally, logging can be done to something other than stdout.
 	Log *log.Entry
@@ -76,9 +76,6 @@ func newStellarCoreRunner(executablePath, configPath, networkPassphrase string, 
 		configPath:        configPath,
 		networkPassphrase: networkPassphrase,
 		historyURLs:       historyURLs,
-		shutdown:          make(chan struct{}),
-		processExit:       make(chan struct{}),
-		processExitError:  nil,
 		tempDir:           tempDir,
 		nonce:             fmt.Sprintf("captive-stellar-core-%x", r.Uint64()),
 	}
@@ -209,7 +206,7 @@ func (r *stellarCoreRunner) runCmd(params ...string) error {
 }
 
 func (r *stellarCoreRunner) catchup(from, to uint32) error {
-	if r.started {
+	if r.tomb != nil {
 		return errors.New("runner already started")
 	}
 	if err := r.runCmd("new-db"); err != nil {
@@ -226,17 +223,17 @@ func (r *stellarCoreRunner) catchup(from, to uint32) error {
 		return errors.Wrap(err, "error creating `stellar-core catchup` subprocess")
 	}
 	r.cmd = cmd
+	r.tomb = new(tomb.Tomb)
 	r.metaPipe, err = r.start()
 	if err != nil {
 		return errors.Wrap(err, "error starting `stellar-core catchup` subprocess")
 	}
-	r.started = true
 
 	return nil
 }
 
 func (r *stellarCoreRunner) runFrom(from uint32, hash string) error {
-	if r.started {
+	if r.tomb != nil {
 		return errors.New("runner already started")
 	}
 	var err error
@@ -254,11 +251,11 @@ func (r *stellarCoreRunner) runFrom(from uint32, hash string) error {
 	if err != nil {
 		return errors.Wrap(err, "error creating `stellar-core run` subprocess")
 	}
+	r.tomb = new(tomb.Tomb)
 	r.metaPipe, err = r.start()
 	if err != nil {
 		return errors.Wrap(err, "error starting `stellar-core run` subprocess")
 	}
-	r.started = true
 
 	return nil
 }
@@ -267,16 +264,8 @@ func (r *stellarCoreRunner) getMetaPipe() io.Reader {
 	return r.metaPipe
 }
 
-func (r *stellarCoreRunner) getProcessExitChan() <-chan struct{} {
-	return r.processExit
-}
-
-func (r *stellarCoreRunner) getProcessExitError() error {
-	return r.processExitError
-}
-
-func (r *stellarCoreRunner) getProcessExitUserInitiated() bool {
-	return r.processExitUserInitiated
+func (r *stellarCoreRunner) getTomb() *tomb.Tomb {
+	return r.tomb
 }
 
 func (r *stellarCoreRunner) setLogger(logger *log.Entry) {
@@ -284,23 +273,26 @@ func (r *stellarCoreRunner) setLogger(logger *log.Entry) {
 }
 
 func (r *stellarCoreRunner) close() error {
-	r.processExitUserInitiated = true
-
 	var err1, err2 error
+
+	if r.tomb != nil {
+		// Kill tomb with context.Canceled. Kill will be called again in start()
+		// when process exit is handled but the error value will not be overwritten.
+		r.tomb.Kill(context.Canceled)
+	}
 
 	if r.processIsAlive() {
 		err1 = r.cmd.Process.Kill()
-		r.cmd.Wait()
-		r.cmd = nil
 	}
+
+	if r.tomb != nil {
+		r.tomb.Wait()
+	}
+	r.tomb = nil
+	r.cmd = nil
+
 	err2 = os.RemoveAll(r.tempDir)
 	r.tempDir = ""
-
-	if r.started {
-		close(r.shutdown)
-		r.wg.Wait()
-	}
-	r.started = false
 
 	if err1 != nil {
 		return errors.Wrap(err1, "error killing subprocess")
@@ -308,5 +300,6 @@ func (r *stellarCoreRunner) close() error {
 	if err2 != nil {
 		return errors.Wrap(err2, "error removing subprocess tmpdir")
 	}
+
 	return nil
 }

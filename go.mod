@@ -80,7 +80,7 @@ require (
 	github.com/yudai/pp v2.0.1+incompatible // indirect
 	github.com/ziutek/mymysql v1.5.4 // indirect
 	golang.org/x/crypto v0.0.0-20191112222119-e1110fd1c708
-	golang.org/x/net v0.0.0-20190827160401-ba9fcec4b297 // indirect
+	golang.org/x/net v0.0.0-20190827160401-ba9fcec4b297
 	golang.org/x/text v0.3.3 // indirect
 	golang.org/x/tools v0.0.0-20190624180213-70d37148ca0c // indirect
 	google.golang.org/api v0.3.1
@@ -89,5 +89,6 @@ require (
 	gopkg.in/gavv/httpexpect.v1 v1.0.0-20170111145843-40724cf1e4a0
 	gopkg.in/gorp.v1 v1.7.1 // indirect
 	gopkg.in/square/go-jose.v2 v2.4.1
+	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7
 	gopkg.in/tylerb/graceful.v1 v1.2.13
 )

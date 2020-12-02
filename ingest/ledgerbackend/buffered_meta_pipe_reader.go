@@ -2,8 +2,11 @@ package ledgerbackend
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"time"
+
+	"gopkg.in/tomb.v1"
 
 	"github.com/pkg/errors"
 	"github.com/stellar/go/support/log"
@@ -65,7 +68,7 @@ type bufferedLedgerMetaReader struct {
 	r      *bufio.Reader
 	c      chan metaResult
 	runner stellarCoreRunnerInterface
-	closed chan struct{}
+	tomb   *tomb.Tomb
 }
 
 // newBufferedLedgerMetaReader creates a new meta reader that will shutdown
@@ -75,7 +78,7 @@ func newBufferedLedgerMetaReader(runner stellarCoreRunnerInterface) *bufferedLed
 		c:      make(chan metaResult, ledgerReadAheadBufferSize),
 		r:      bufio.NewReaderSize(runner.getMetaPipe(), metaPipeBufferSize),
 		runner: runner,
-		closed: make(chan struct{}),
+		tomb:   new(tomb.Tomb),
 	}
 }
 
@@ -88,7 +91,7 @@ func (b *bufferedLedgerMetaReader) readLedgerMetaFromPipe(untilSequence uint32) 
 	frameLength, err := xdr.ReadFrameLength(b.r)
 	if err != nil {
 		select {
-		case <-b.runner.getProcessExitChan():
+		case <-b.runner.getTomb().Dead():
 			return nil, wrapStellarCoreRunnerError(b.runner)
 		default:
 			return nil, errors.Wrap(err, "error reading frame length")
@@ -98,12 +101,12 @@ func (b *bufferedLedgerMetaReader) readLedgerMetaFromPipe(untilSequence uint32) 
 	for frameLength > metaPipeBufferSize && len(b.c) > 0 {
 		// Wait for LedgerCloseMeta buffer to be cleared to minimize memory usage.
 		select {
-		case <-b.runner.getProcessExitChan():
+		case <-b.runner.getTomb().Dead():
 			if untilSequence != 0 {
 				// If untilSequence != 0 it's possible that Stellar-Core process
 				// exits but there are still ledgers in a buffer (catchup). In such
 				// case we ignore cases when Stellar-Core exited with no errors.
-				processErr := b.runner.getProcessExitError()
+				processErr := b.runner.getTomb().Err()
 				if processErr != nil {
 					return nil, errors.Wrap(processErr, "stellar-core process exited with an error")
 				}
@@ -124,7 +127,7 @@ func (b *bufferedLedgerMetaReader) readLedgerMetaFromPipe(untilSequence uint32) 
 		err = errors.Wrap(err, "unmarshalling framed LedgerCloseMeta")
 
 		select {
-		case <-b.runner.getProcessExitChan():
+		case <-b.runner.getTomb().Dead():
 			return nil, wrapStellarCoreRunnerError(b.runner)
 		default:
 			return nil, err
@@ -137,17 +140,12 @@ func (b *bufferedLedgerMetaReader) getChannel() <-chan metaResult {
 	return b.c
 }
 
-func (b *bufferedLedgerMetaReader) waitForClose() {
-	// If buffer is full, keep reading to make sure it receives
-	// a shutdown signal from stellarCoreRunner.
-loop:
-	for {
-		select {
-		case <-b.c:
-		case <-b.closed:
-			break loop
-		}
-	}
+// close makes sure that go routine returns. In general, it will return
+// when Stellar-Core exits but there's a special case when it's blocked
+// on writing to a full channel and calling Close() solve this.
+func (b *bufferedLedgerMetaReader) close() {
+	b.tomb.Kill(nil)
+	b.tomb.Wait()
 }
 
 // Start starts an internal go routine that reads binary ledger data into
@@ -158,7 +156,7 @@ func (b *bufferedLedgerMetaReader) start(untilSequence uint32) {
 	printBufferOccupation := time.NewTicker(5 * time.Second)
 	defer func() {
 		printBufferOccupation.Stop()
-		close(b.closed)
+		b.tomb.Done()
 	}()
 
 	for {
@@ -169,14 +167,17 @@ func (b *bufferedLedgerMetaReader) start(untilSequence uint32) {
 		}
 
 		meta, err := b.readLedgerMetaFromPipe(untilSequence)
-		if err != nil {
-			// When `GetLedger` sees the error it will close the backend. We shouldn't
-			// close it now because there may be some ledgers in a buffer.
-			b.c <- metaResult{nil, err}
+
+		select {
+		case b.c <- metaResult{meta, err}:
+		case <-b.tomb.Dying():
+			// Go routine can be flagged as dying by calling b.tomb.Kill (in close()).
 			return
 		}
 
-		b.c <- metaResult{meta, nil}
+		if err != nil {
+			return
+		}
 
 		if untilSequence != 0 {
 			if meta.LedgerSequence() >= untilSequence {
@@ -184,5 +185,17 @@ func (b *bufferedLedgerMetaReader) start(untilSequence uint32) {
 				return
 			}
 		}
+	}
+}
+
+func wrapStellarCoreRunnerError(r stellarCoreRunnerInterface) error {
+	processErr := r.getTomb().Err()
+	switch processErr {
+	case nil:
+		return errors.New("stellar-core process exited unexpectedly without an error")
+	case context.Canceled:
+		return processErr
+	default:
+		return errors.Wrap(processErr, "stellar-core process exited with an error")
 	}
 }
