@@ -273,8 +273,7 @@ func TestCaptivePrepareRangeUnexpectedExit(t *testing.T) {
 	}
 
 	err := captiveBackend.PrepareRange(BoundedRange(100, 200))
-	assert.Error(t, err)
-	assert.EqualError(t, err, "stellar-core process exited unexpectedly without an error")
+	assert.NoError(t, err)
 }
 
 func TestCaptivePrepareRangeUserCancel(t *testing.T) {
