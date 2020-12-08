@@ -336,13 +336,16 @@ func (c *CaptiveStellarCore) runFromParams(from uint32) (runFrom uint32, ledgerH
 //
 // Returns `context.Cancelled` if `Close` was called from another Go routine.
 func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
+	// c.mutex is unlocked on error and before waitloop to allow calling Close()
+	// to intrerupt the process.
 	c.mutex.Lock()
-	defer c.mutex.Unlock()
 
 	// Range already prepared
 	if prepared, err := c.isPrepared(ledgerRange); err != nil {
+		c.mutex.Unlock()
 		return errors.Wrap(err, "error in IsPrepared")
 	} else if prepared {
+		c.mutex.Unlock()
 		return nil
 	}
 
@@ -353,10 +356,13 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 		err = c.openOnlineReplaySubprocess(ledgerRange.from)
 	}
 	if err != nil {
+		c.mutex.Unlock()
 		return errors.Wrap(err, "opening subprocess")
 	}
 
-mainloop:
+	c.mutex.Unlock()
+
+waitloop:
 	for {
 		select {
 		case <-c.stellarCoreRunner.getTomb().Dead():
@@ -384,14 +390,14 @@ mainloop:
 		// Wait/fast-forward to the expected ledger or an error. We need to check
 		// buffer length because `GetLedger` may be blocking.
 		for len(c.ledgerBuffer.getChannel()) > 0 {
-			_, _, err := c.getLedger(c.nextLedger)
+			_, _, err := c.GetLedger(c.nextLedger)
 			if err != nil {
 				return errors.Wrapf(err, "Error fast-forwarding to %d", ledgerRange.from)
 			}
 
 			// If nextLedger > ledgerRange.from then ledgerRange.from is cached.
 			if c.nextLedger > ledgerRange.from {
-				break mainloop
+				break waitloop
 			}
 		}
 
@@ -605,9 +611,6 @@ func (c *CaptiveStellarCore) close() error {
 	if c.ledgerBuffer != nil {
 		c.ledgerBuffer.close()
 	}
-
-	c.stellarCoreRunner = nil
-	c.ledgerBuffer = nil
 
 	c.nextLedger = 0
 	c.lastLedger = nil

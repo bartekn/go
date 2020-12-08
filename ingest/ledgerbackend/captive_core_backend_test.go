@@ -2,11 +2,13 @@ package ledgerbackend
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stellar/go/historyarchive"
 	"github.com/stellar/go/network"
@@ -14,7 +16,6 @@ import (
 	"github.com/stellar/go/xdr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"golang.org/x/net/context"
 	"gopkg.in/tomb.v1"
 )
 
@@ -194,6 +195,58 @@ func TestCaptivePrepareRange(t *testing.T) {
 
 	err = captiveBackend.Close()
 	assert.NoError(t, err)
+}
+
+// TestCaptivePrepareRangeCloseAsync tests if PrepareRange is cancelled after
+// calling Close asynchronously.
+func TestCaptivePrepareRangeCloseAsync(t *testing.T) {
+	// io.Pipe will wait indefinitely instead of returning EOF so it's good
+	// to simulate waiting for bytes from meta pipe.
+	reader, writer := io.Pipe()
+
+	go writeLedgerHeader(writer, testLedgerHeader{sequence: 64})
+
+	tomb := &tomb.Tomb{}
+	mockRunner := &stellarCoreRunnerMock{}
+	mockRunner.On("catchup", uint32(100), uint32(200)).Return(nil).Once()
+	mockRunner.On("getTomb").Return(tomb)
+	mockRunner.On("getMetaPipe").Return(reader)
+	mockRunner.On("close").Run(func(mock.Arguments) {
+		tomb.Kill(context.Canceled)
+		tomb.Done()
+	}).Return(nil).Once()
+
+	mockArchive := &historyarchive.MockArchive{}
+	mockArchive.
+		On("GetRootHAS").
+		Return(historyarchive.HistoryArchiveState{
+			CurrentLedger: uint32(200),
+		}, nil)
+
+	captiveBackend := CaptiveStellarCore{
+		archive: mockArchive,
+		stellarCoreRunnerFactory: func(_ stellarCoreRunnerMode) (stellarCoreRunnerInterface, error) {
+			return mockRunner, nil
+		},
+	}
+
+	prepareRangeExited := make(chan struct{})
+
+	go func() {
+		err := captiveBackend.PrepareRange(BoundedRange(100, 200))
+		assert.Equal(t, context.Canceled, err)
+		close(prepareRangeExited)
+		writer.Close()
+	}()
+
+	// Wait for nextLeder bump that indicates we are in waitloop.
+	for captiveBackend.nextLedger < 65 {
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	err := captiveBackend.Close()
+	assert.NoError(t, err)
+	<-prepareRangeExited
 }
 
 func TestCaptivePrepareRangeCrash(t *testing.T) {
