@@ -35,7 +35,7 @@ func roundDownToFirstReplayAfterCheckpointStart(ledger uint32) uint32 {
 //     keep ledger state in RAM. It requires around 3GB of RAM as of August 2020.
 //   * When a UnboundedRange is prepared it runs Stellar-Core catchup mode to
 //     sync with the first ledger and then runs it in a normal mode. This
-//     requires the configPath to be provided because a database connection is
+//     requires the configAppendPath to be provided because a database connection is
 //     required and quorum set needs to be selected.
 //
 // The database requirement for UnboundedRange will soon be removed when some
@@ -63,12 +63,9 @@ func roundDownToFirstReplayAfterCheckpointStart(ledger uint32) uint32 {
 //
 // Requires Stellar-Core v13.2.0+.
 type CaptiveStellarCore struct {
-	executablePath    string
-	configPath        string
-	networkPassphrase string
-	historyURLs       []string
-	archive           historyarchive.ArchiveInterface
-	ledgerHashStore   TrustedLedgerHashStore
+	configAppendPath string
+	archive          historyarchive.ArchiveInterface
+	ledgerHashStore  TrustedLedgerHashStore
 
 	// Quick note on how shutdown works:
 	// If Stellar-Core exits, the exit signal is "catched" by bufferedLedgerMetaReader
@@ -80,7 +77,7 @@ type CaptiveStellarCore struct {
 	stellarCoreRunner stellarCoreRunnerInterface
 
 	// For testing
-	stellarCoreRunnerFactory func(configPath string) (stellarCoreRunnerInterface, error)
+	stellarCoreRunnerFactory func(mode stellarCoreRunnerMode, captiveCoreConfigAppendPath string) (stellarCoreRunnerInterface, error)
 
 	// Defines if the blocking mode (off by default) is on or off. In blocking mode,
 	// calling GetLedger blocks until the requested ledger is available. This is useful
@@ -99,28 +96,30 @@ type CaptiveStellarCore struct {
 	// waitIntervalPrepareRange defines a time to wait between checking if the buffer
 	// is empty. Default 1s, lower in tests to make them faster.
 	waitIntervalPrepareRange time.Duration
-
-	// Optionally, pass along a custom logger to the underlying runner.
-	log *log.Entry
 }
 
 // CaptiveCoreConfig contains all the parameters required to create a CaptiveStellarCore instance
 type CaptiveCoreConfig struct {
-	// StellarCoreBinaryPath is the file path to the Stellar Core binary
-	StellarCoreBinaryPath string
-	// StellarCoreConfigPath is the file path to the Stellar Core configuration file used by captive core
-	StellarCoreConfigPath string
+	// BinaryPath is the file path to the Stellar Core binary
+	BinaryPath string
+	// ConfigAppendPath is the file path to additional configuration for the Stellar Core configuration file used by captive core
+	ConfigAppendPath string
 	// NetworkPassphrase is the Stellar network passphrase used by captive core when connecting to the Stellar network
 	NetworkPassphrase string
 	// HistoryArchiveURLs are a list of history archive urls
 	HistoryArchiveURLs []string
 	// LedgerHashStore is an optional store used to obtain hashes for ledger sequences from a trusted source
 	LedgerHashStore TrustedLedgerHashStore
+	// HTTPPort is the TCP port to listen for requests (defaults to 0, which disables the HTTP server)
+	HTTPPort uint
+	// Log is an (optional) custom logger which will capture any output from the Stellar Core process.
+	// If Log is omitted then all output will be printed to stdout.
+	Log *log.Entry
 }
 
 // NewCaptive returns a new CaptiveStellarCore.
 //
-// All parameters are required, except configPath which is not required when
+// All parameters are required, except configAppendPath which is not required when
 // working with BoundedRanges only.
 func NewCaptive(config CaptiveCoreConfig) (*CaptiveStellarCore, error) {
 	archive, err := historyarchive.Connect(
@@ -135,31 +134,18 @@ func NewCaptive(config CaptiveCoreConfig) (*CaptiveStellarCore, error) {
 
 	c := &CaptiveStellarCore{
 		archive:                  archive,
-		executablePath:           config.StellarCoreBinaryPath,
-		configPath:               config.StellarCoreConfigPath,
-		historyURLs:              config.HistoryArchiveURLs,
-		networkPassphrase:        config.NetworkPassphrase,
+		configAppendPath:         config.ConfigAppendPath,
 		waitIntervalPrepareRange: time.Second,
 		ledgerHashStore:          config.LedgerHashStore,
 	}
-	c.stellarCoreRunnerFactory = func(configPath2 string) (stellarCoreRunnerInterface, error) {
-		runner, innerErr := newStellarCoreRunner(
-			config.StellarCoreBinaryPath,
-			configPath2,
-			config.NetworkPassphrase,
-			config.HistoryArchiveURLs,
-		)
+	c.stellarCoreRunnerFactory = func(mode stellarCoreRunnerMode, appendConfigPath string) (stellarCoreRunnerInterface, error) {
+		runner, innerErr := newStellarCoreRunner(config, mode)
 		if innerErr != nil {
 			return runner, innerErr
 		}
-		runner.setLogger(c.log)
 		return runner, nil
 	}
 	return c, nil
-}
-
-func (c *CaptiveStellarCore) SetStellarCoreLogger(logger *log.Entry) {
-	c.log = logger
 }
 
 func (c *CaptiveStellarCore) getLatestCheckpointSequence() (uint32, error) {
@@ -193,8 +179,8 @@ func (c *CaptiveStellarCore) openOfflineReplaySubprocess(from, to uint32) error 
 	}
 
 	if c.stellarCoreRunner == nil {
-		// configPath is empty in an offline mode because it's generated
-		c.stellarCoreRunner, err = c.stellarCoreRunnerFactory("")
+		// configAppendPath is empty in an offline mode because it's generated
+		c.stellarCoreRunner, err = c.stellarCoreRunnerFactory(stellarCoreRunnerModeOffline, "")
 		if err != nil {
 			return errors.Wrap(err, "error creating stellar-core runner")
 		}
@@ -246,10 +232,7 @@ func (c *CaptiveStellarCore) openOnlineReplaySubprocess(from uint32) error {
 	}
 
 	if c.stellarCoreRunner == nil {
-		if c.configPath == "" {
-			return errors.New("stellar-core config file path cannot be empty in an online mode")
-		}
-		c.stellarCoreRunner, err = c.stellarCoreRunnerFactory(c.configPath)
+		c.stellarCoreRunner, err = c.stellarCoreRunnerFactory(stellarCoreRunnerModeOnline, c.configAppendPath)
 		if err != nil {
 			return errors.Wrap(err, "error creating stellar-core runner")
 		}
@@ -299,30 +282,28 @@ func (c *CaptiveStellarCore) runFromParams(from uint32) (runFrom uint32, ledgerH
 	}
 
 	if from <= 63 {
-		// For ledgers before (and including) first checkpoint, we start streaming
-		// without providing a hash, to avoid waiting for the checkpoint.
-		// It will always start streaming from ledger 2.
+		// For ledgers before (and including) first checkpoint, get/wait the first
+		// checkpoint to get the ledger header. It will always start streaming
+		// from ledger 2.
 		nextLedger = 2
-		runFrom = 2
 		// The line below is to support a special case for streaming ledger 2
 		// that works for all other ledgers <= 63 (fast-forward).
 		// We can't set from=2 because Stellar-Core will not allow starting from 1.
 		// To solve this we start from 3 and exploit the fast that Stellar-Core
 		// will stream data from 2 for the first checkpoint.
 		from = 3
-		return
-	}
-
-	// For ledgers after the first checkpoint, start at the previous checkpoint
-	// and fast-forward from there.
-	if !historyarchive.IsCheckpoint(from) {
-		from = historyarchive.PrevCheckpoint(from)
-	}
-	// Streaming will start from the previous checkpoint + 1
-	nextLedger = from - 63
-	if nextLedger < 2 {
-		// Stellar-Core always streams from ledger 2 at min.
-		nextLedger = 2
+	} else {
+		// For ledgers after the first checkpoint, start at the previous checkpoint
+		// and fast-forward from there.
+		if !historyarchive.IsCheckpoint(from) {
+			from = historyarchive.PrevCheckpoint(from)
+		}
+		// Streaming will start from the previous checkpoint + 1
+		nextLedger = from - 63
+		if nextLedger < 2 {
+			// Stellar-Core always streams from ledger 2 at min.
+			nextLedger = 2
+		}
 	}
 
 	runFrom = from - 1

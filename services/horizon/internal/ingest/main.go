@@ -63,14 +63,15 @@ const (
 var log = logpkg.DefaultLogger.WithField("service", "ingest")
 
 type Config struct {
-	CoreSession           *db.Session
-	StellarCoreURL        string
-	StellarCoreCursor     string
-	EnableCaptiveCore     bool
-	StellarCoreBinaryPath string
-	StellarCoreConfigPath string
-	RemoteCaptiveCoreURL  string
-	NetworkPassphrase     string
+	CoreSession                 *db.Session
+	StellarCoreURL              string
+	StellarCoreCursor           string
+	EnableCaptiveCore           bool
+	CaptiveCoreBinaryPath       string
+	CaptiveCoreConfigAppendPath string
+	CaptiveCoreHTTPPort         uint
+	RemoteCaptiveCoreURL        string
+	NetworkPassphrase           string
 
 	HistorySession           *db.Session
 	HistoryArchiveURL        string
@@ -174,23 +175,21 @@ func NewSystem(config Config) (System, error) {
 				return nil, errors.Wrap(err, "error creating captive core backend")
 			}
 		} else {
-			var captiveCoreBackend *ledgerbackend.CaptiveStellarCore
-			captiveCoreBackend, err = ledgerbackend.NewCaptive(
+			ledgerBackend, err = ledgerbackend.NewCaptive(
 				ledgerbackend.CaptiveCoreConfig{
-					StellarCoreBinaryPath: config.StellarCoreBinaryPath,
-					StellarCoreConfigPath: config.StellarCoreConfigPath,
-					NetworkPassphrase:     config.NetworkPassphrase,
-					HistoryArchiveURLs:    []string{config.HistoryArchiveURL},
-					LedgerHashStore:       ledgerbackend.NewHorizonDBLedgerHashStore(config.HistorySession),
+					BinaryPath:         config.CaptiveCoreBinaryPath,
+					ConfigAppendPath:   config.CaptiveCoreConfigAppendPath,
+					HTTPPort:           config.CaptiveCoreHTTPPort,
+					NetworkPassphrase:  config.NetworkPassphrase,
+					HistoryArchiveURLs: []string{config.HistoryArchiveURL},
+					LedgerHashStore:    ledgerbackend.NewHorizonDBLedgerHashStore(config.HistorySession),
+					Log:                log.WithField("subservice", "stellar-core"),
 				},
 			)
 			if err != nil {
 				cancel()
 				return nil, errors.Wrap(err, "error creating captive core backend")
 			}
-			captiveCoreBackend.SetStellarCoreLogger(
-				log.WithField("subservice", "stellar-core"))
-			ledgerBackend = captiveCoreBackend
 		}
 	} else {
 		coreSession := config.CoreSession.Clone()
