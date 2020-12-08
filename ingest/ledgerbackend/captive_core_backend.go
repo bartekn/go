@@ -590,7 +590,9 @@ func (c *CaptiveStellarCore) isClosed() bool {
 }
 
 // Close closes existing Stellar-Core process, streaming sessions and removes all
-// temporary files.
+// temporary files. Please note that this can be executed concurently, however it
+// may block if `GetLedger` is running on a unbounded range (because `GetLedger`
+// is blocking in this case).
 func (c *CaptiveStellarCore) Close() error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
