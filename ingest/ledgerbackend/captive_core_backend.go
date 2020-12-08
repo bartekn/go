@@ -284,18 +284,6 @@ func (c *CaptiveStellarCore) openOnlineReplaySubprocess(from uint32) error {
 	// read-ahead buffer
 	c.ledgerBuffer = newBufferedLedgerMetaReader(c.stellarCoreRunner)
 	go c.ledgerBuffer.start(0)
-
-	// if nextLedger is behind - fast-forward until expected ledger
-	if c.nextLedger < from {
-		// make GetFrom blocking temporarily
-		c.blocking = true
-		_, _, err := c.GetLedger(from)
-		c.blocking = false
-		if err != nil {
-			return errors.Wrapf(err, "Error fast-forwarding to %d", from)
-		}
-	}
-
 	return nil
 }
 
@@ -412,10 +400,20 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 			}
 		default:
 		}
-		// Wait for the first ledger or an error
+		// Wait/fast-forward to the expected ledger or an error. We need to check
+		// buffer length because `GetLedger` may be blocking.
 		if len(c.ledgerBuffer.getChannel()) > 0 {
-			break
+			_, _, err := c.GetLedger(c.nextLedger)
+			if err != nil {
+				return errors.Wrapf(err, "Error fast-forwarding to %d", ledgerRange.from)
+			}
+
+			// If nextLedger > ledgerRange.from then ledgerRange.from is cached.
+			if c.nextLedger > ledgerRange.from {
+				break
+			}
 		}
+
 		time.Sleep(c.waitIntervalPrepareRange)
 	}
 
@@ -602,8 +600,10 @@ func (c *CaptiveStellarCore) Close() error {
 
 	if c.ledgerBuffer != nil {
 		c.ledgerBuffer.close()
-		c.ledgerBuffer = nil
 	}
+
+	c.stellarCoreRunner = nil
+	c.ledgerBuffer = nil
 
 	c.nextLedger = 0
 	c.lastLedger = nil

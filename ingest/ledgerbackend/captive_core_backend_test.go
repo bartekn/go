@@ -167,7 +167,7 @@ func TestCaptivePrepareRange(t *testing.T) {
 
 	// Core will actually start with the last checkpoint before the from ledger
 	// and then rewind to the `from` ledger.
-	for i := 64; i <= 99; i++ {
+	for i := 64; i <= 100; i++ {
 		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
 	}
 
@@ -412,6 +412,10 @@ func TestCaptivePrepareRange_FromIsAheadOfRootHAS(t *testing.T) {
 
 func TestCaptivePrepareRange_ToIsAheadOfRootHAS(t *testing.T) {
 	var buf bytes.Buffer
+
+	for i := 64; i <= 100; i++ {
+		writeLedgerHeader(&buf, testLedgerHeader{sequence: uint32(i)})
+	}
 
 	tomb := &tomb.Tomb{}
 	mockRunner := &stellarCoreRunnerMock{}
@@ -719,21 +723,21 @@ func TestCaptiveGetLedger(t *testing.T) {
 	assert.NoError(t, err)
 
 	// reads value from buffer
-	found, meta, err := captiveBackend.GetLedger(64)
+	found, meta, err := captiveBackend.GetLedger(65)
 	tt.NoError(err)
 	tt.True(found)
-	tt.Equal(xdr.Uint32(64), meta.V0.LedgerHeader.Header.LedgerSeq)
+	tt.Equal(xdr.Uint32(65), meta.V0.LedgerHeader.Header.LedgerSeq)
 
 	// advance to next sequence number
-	tt.Equal(uint32(65), captiveBackend.nextLedger)
+	tt.Equal(uint32(66), captiveBackend.nextLedger)
 
 	// reads value from cachedMeta
-	_, cachedMeta, err := captiveBackend.GetLedger(64)
+	_, cachedMeta, err := captiveBackend.GetLedger(65)
 	tt.NoError(err)
 	tt.Equal(meta, cachedMeta)
 
 	// next sequence number didn't get consumed
-	tt.Equal(uint32(65), captiveBackend.nextLedger)
+	tt.Equal(uint32(66), captiveBackend.nextLedger)
 
 	_, _, err = captiveBackend.GetLedger(66)
 	tt.NoError(err)
@@ -813,11 +817,7 @@ func TestCaptiveGetLedger_ErrReadingMetaResult(t *testing.T) {
 	}
 
 	err := captiveBackend.PrepareRange(BoundedRange(65, 66))
-	assert.NoError(t, err)
-
-	// try reading from an empty buffer
-	_, _, err = captiveBackend.GetLedger(64)
-	tt.EqualError(err, "error reading frame length: unmarshalling XDR frame header: xdr:DecodeUint: EOF while decoding 4 bytes - read: '[]'")
+	tt.EqualError(err, "Error fast-forwarding to 65: error reading frame length: unmarshalling XDR frame header: xdr:DecodeUint: EOF while decoding 4 bytes - read: '[]'")
 
 	// closes if there is an error getting ledger
 	tt.True(captiveBackend.isClosed())
@@ -894,7 +894,7 @@ func TestCaptiveGetLedger_BoundedGetLedgerAfterCoreExit(t *testing.T) {
 	err := captiveBackend.PrepareRange(BoundedRange(65, 70))
 	assert.NoError(t, err)
 
-	waitForLedgersInBuffer(&captiveBackend, 70-64+1)
+	waitForLedgersInBuffer(&captiveBackend, 70-64-1)
 
 	// All ledgers from bounded range buffered so Stellar-Core terminates.
 	tomb.Done()
@@ -1326,6 +1326,8 @@ func TestCaptivePreviousLedgerCheck(t *testing.T) {
 	assert.NotNil(t, captiveBackend.previousLedgerHash)
 	assert.Equal(t, uint32(301), captiveBackend.nextLedger)
 	assert.Equal(t, meta.LedgerHash().HexString(), *captiveBackend.previousLedgerHash)
+
+	waitForLedgersInBuffer(&captiveBackend, 1)
 
 	_, _, err = captiveBackend.GetLedger(301)
 	assert.EqualError(t, err, "unexpected previous ledger hash for ledger 301 (expected=6f00000000000000000000000000000000000000000000000000000000000000 actual=0000000000000000000000000000000000000000000000000000000000000000)")
