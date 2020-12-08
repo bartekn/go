@@ -3,6 +3,7 @@ package ledgerbackend
 import (
 	"context"
 	"encoding/hex"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -76,8 +77,15 @@ type CaptiveStellarCore struct {
 	ledgerBuffer      *bufferedLedgerMetaReader
 	stellarCoreRunner stellarCoreRunnerInterface
 
+	// waitIntervalPrepareRange defines a time to wait between checking if the buffer
+	// is empty. Default 1s, lower in tests to make them faster.
+	waitIntervalPrepareRange time.Duration
+
 	// For testing
 	stellarCoreRunnerFactory func(mode stellarCoreRunnerMode, captiveCoreConfigAppendPath string) (stellarCoreRunnerInterface, error)
+
+	// mutex protects all values below, ex. Close() can be called concurrently.
+	mutex sync.Mutex
 
 	// Defines if the blocking mode (off by default) is on or off. In blocking mode,
 	// calling GetLedger blocks until the requested ledger is available. This is useful
@@ -92,10 +100,6 @@ type CaptiveStellarCore struct {
 	nextLedger         uint32  // next ledger expected, error w/ restart if not seen
 	lastLedger         *uint32 // end of current segment if offline, nil if online
 	previousLedgerHash *string
-
-	// waitIntervalPrepareRange defines a time to wait between checking if the buffer
-	// is empty. Default 1s, lower in tests to make them faster.
-	waitIntervalPrepareRange time.Duration
 }
 
 // CaptiveCoreConfig contains all the parameters required to create a CaptiveStellarCore instance
@@ -158,7 +162,7 @@ func (c *CaptiveStellarCore) getLatestCheckpointSequence() (uint32, error) {
 }
 
 func (c *CaptiveStellarCore) openOfflineReplaySubprocess(from, to uint32) error {
-	err := c.Close()
+	err := c.close()
 	if err != nil {
 		return errors.Wrap(err, "error closing existing session")
 	}
@@ -209,7 +213,7 @@ func (c *CaptiveStellarCore) openOnlineReplaySubprocess(from uint32) error {
 		return nil
 	}
 
-	err := c.Close()
+	err := c.close()
 	if err != nil {
 		return errors.Wrap(err, "error closing existing session")
 	}
@@ -340,8 +344,11 @@ func (c *CaptiveStellarCore) runFromParams(from uint32) (runFrom uint32, ledgerH
 //
 // Returns `context.Cancelled` if `Close` was called from another Go routine.
 func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	// Range already prepared
-	if prepared, err := c.IsPrepared(ledgerRange); err != nil {
+	if prepared, err := c.isPrepared(ledgerRange); err != nil {
 		return errors.Wrap(err, "error in IsPrepared")
 	} else if prepared {
 		return nil
@@ -384,7 +391,7 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 		// Wait/fast-forward to the expected ledger or an error. We need to check
 		// buffer length because `GetLedger` may be blocking.
 		if len(c.ledgerBuffer.getChannel()) > 0 {
-			_, _, err := c.GetLedger(c.nextLedger)
+			_, _, err := c.getLedger(c.nextLedger)
 			if err != nil {
 				return errors.Wrapf(err, "Error fast-forwarding to %d", ledgerRange.from)
 			}
@@ -403,6 +410,12 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 
 // IsPrepared returns true if a given ledgerRange is prepared.
 func (c *CaptiveStellarCore) IsPrepared(ledgerRange Range) (bool, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.isPrepared(ledgerRange)
+}
+
+func (c *CaptiveStellarCore) isPrepared(ledgerRange Range) (bool, error) {
 	lastLedger := uint32(0)
 	if c.lastLedger != nil {
 		lastLedger = *c.lastLedger
@@ -413,10 +426,10 @@ func (c *CaptiveStellarCore) IsPrepared(ledgerRange Range) (bool, error) {
 		cachedLedger = c.cachedMeta.LedgerSequence()
 	}
 
-	return c.isPrepared(c.nextLedger, lastLedger, cachedLedger, ledgerRange), nil
+	return c.isPreparedParams(c.nextLedger, lastLedger, cachedLedger, ledgerRange), nil
 }
 
-func (*CaptiveStellarCore) isPrepared(nextLedger, lastLedger, cachedLedger uint32, ledgerRange Range) bool {
+func (*CaptiveStellarCore) isPreparedParams(nextLedger, lastLedger, cachedLedger uint32, ledgerRange Range) bool {
 	if nextLedger == 0 {
 		return false
 	}
@@ -456,6 +469,12 @@ func (*CaptiveStellarCore) isPrepared(nextLedger, lastLedger, cachedLedger uint3
 //
 // Returns `context.Cancelled` if `Close` was called from another Go routine.
 func (c *CaptiveStellarCore) GetLedger(sequence uint32) (bool, xdr.LedgerCloseMeta, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.getLedger(sequence)
+}
+
+func (c *CaptiveStellarCore) getLedger(sequence uint32) (bool, xdr.LedgerCloseMeta, error) {
 	if c.cachedMeta != nil && sequence == c.cachedMeta.LedgerSequence() {
 		// GetLedger can be called multiple times using the same sequence, ex. to create
 		// change and transaction readers. If we have this ledger buffered, let's return it.
@@ -531,7 +550,7 @@ loop:
 
 			// If we got the _last_ ledger in a segment, close before returning.
 			if c.lastLedger != nil && *c.lastLedger == seq {
-				if err := c.Close(); err != nil {
+				if err := c.close(); err != nil {
 					return false, xdr.LedgerCloseMeta{}, errors.Wrap(err, "error closing session")
 				}
 			}
@@ -541,7 +560,7 @@ loop:
 	// All paths above that break out of the loop (instead of return)
 	// set e to non-nil: there was an error and we should close and
 	// reset state before retuning an error to our caller.
-	c.Close()
+	c.close()
 	return false, xdr.LedgerCloseMeta{}, errOut
 }
 
@@ -553,6 +572,9 @@ loop:
 // the latest sequence closed by the network. It's always the last value available
 // in the backend.
 func (c *CaptiveStellarCore) GetLatestLedgerSequence() (uint32, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	if c.isClosed() {
 		return 0, errors.New("stellar-core must be opened to return latest available sequence")
 	}
@@ -570,6 +592,12 @@ func (c *CaptiveStellarCore) isClosed() bool {
 // Close closes existing Stellar-Core process, streaming sessions and removes all
 // temporary files.
 func (c *CaptiveStellarCore) Close() error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.close()
+}
+
+func (c *CaptiveStellarCore) close() error {
 	if c.stellarCoreRunner != nil {
 		// Closing stellarCoreRunner will automatically close bufferedLedgerMetaReader's
 		// start() go routine because it's checking it's state.

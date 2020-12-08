@@ -1183,7 +1183,7 @@ func TestCaptiveRunFromParams(t *testing.T) {
 	}
 }
 
-func TestCaptiveIsPrepared(t *testing.T) {
+func TestCaptiveIsPreparedParams(t *testing.T) {
 	var tests = []struct {
 		nextLedger   uint32
 		lastLedger   uint32
@@ -1206,7 +1206,7 @@ func TestCaptiveIsPrepared(t *testing.T) {
 		t.Run(fmt.Sprintf("next_%d_last_%d_cached_%d_range_%v", tc.nextLedger, tc.lastLedger, tc.cachedLedger, tc.ledgerRange), func(t *testing.T) {
 			captiveBackend := CaptiveStellarCore{}
 
-			result := captiveBackend.isPrepared(
+			result := captiveBackend.isPreparedParams(
 				tc.nextLedger,
 				tc.lastLedger,
 				tc.cachedLedger,
