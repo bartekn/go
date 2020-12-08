@@ -970,7 +970,7 @@ func (s *system) maybePrepareRange(from uint32) (bool, error) {
 		// Release distributed ingestion lock and prepare the range
 		s.historyQ.Rollback()
 		log.Info("Released ingestion lock to prepare range")
-		log.WithFields(logpkg.F{"ledger": from}).Info("Preparing range")
+		log.WithFields(logpkg.F{"from": from}).Info("Preparing range")
 		startTime := time.Now()
 
 		err = s.ledgerBackend.PrepareRange(ledgerRange)
@@ -979,7 +979,7 @@ func (s *system) maybePrepareRange(from uint32) (bool, error) {
 		}
 
 		log.WithFields(logpkg.F{
-			"ledger":   from,
+			"from":     from,
 			"duration": time.Since(startTime).Seconds(),
 		}).Info("Range prepared")
 

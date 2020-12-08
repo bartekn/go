@@ -139,7 +139,7 @@ func NewCaptive(config CaptiveCoreConfig) (*CaptiveStellarCore, error) {
 	c := &CaptiveStellarCore{
 		archive:                  archive,
 		configAppendPath:         config.ConfigAppendPath,
-		waitIntervalPrepareRange: time.Second,
+		waitIntervalPrepareRange: 100 * time.Millisecond,
 		ledgerHashStore:          config.LedgerHashStore,
 	}
 	c.stellarCoreRunnerFactory = func(mode stellarCoreRunnerMode, appendConfigPath string) (stellarCoreRunnerInterface, error) {
@@ -364,6 +364,7 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 		return errors.Wrap(err, "opening subprocess")
 	}
 
+mainloop:
 	for {
 		select {
 		case <-c.stellarCoreRunner.getTomb().Dead():
@@ -390,7 +391,7 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 		}
 		// Wait/fast-forward to the expected ledger or an error. We need to check
 		// buffer length because `GetLedger` may be blocking.
-		if len(c.ledgerBuffer.getChannel()) > 0 {
+		for len(c.ledgerBuffer.getChannel()) > 0 {
 			_, _, err := c.getLedger(c.nextLedger)
 			if err != nil {
 				return errors.Wrapf(err, "Error fast-forwarding to %d", ledgerRange.from)
@@ -398,7 +399,7 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 
 			// If nextLedger > ledgerRange.from then ledgerRange.from is cached.
 			if c.nextLedger > ledgerRange.from {
-				break
+				break mainloop
 			}
 		}
 
