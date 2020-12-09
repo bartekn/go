@@ -240,7 +240,15 @@ func TestCaptivePrepareRangeCloseAsync(t *testing.T) {
 	}()
 
 	// Wait for nextLeder bump that indicates we are in waitloop.
-	for captiveBackend.nextLedger < 65 {
+	for {
+		// To make race detector happy
+		captiveBackend.mutex.Lock()
+		nextLedger := captiveBackend.nextLedger
+		captiveBackend.mutex.Unlock()
+
+		if nextLedger == 65 {
+			break
+		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
