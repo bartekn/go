@@ -67,8 +67,19 @@ if [ ! -z "$BRANCH" ]; then
 fi
 git log -1
 
+function convert_state_tables() {
+	# Convert state tables to UNLOGGED for performance reasons
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE accounts SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE accounts_data SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE claimable_balances SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE exp_asset_stats SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE offers SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE trust_lines SET UNLOGGED;"
+}
+
 /usr/local/go/bin/go build -v ./services/horizon
 ./horizon db migrate up
+convert_state_tables
 ./horizon ingest verify-range --from $FROM --to $TO --verify-state
 
 function compare() {
