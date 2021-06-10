@@ -67,19 +67,32 @@ if [ ! -z "$BRANCH" ]; then
 fi
 git log -1
 
-function convert_state_tables() {
-	# Convert state tables to UNLOGGED for performance reasons
+function alter_tables_unlogged() {
+	# UNLOGGED for performance reasons
 	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE accounts SET UNLOGGED;"
 	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE accounts_data SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE accounts_signers SET UNLOGGED;"
 	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE claimable_balances SET UNLOGGED;"
 	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE exp_asset_stats SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_accounts SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_assets SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_claimable_balances SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_effects SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_ledgers SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_operation_claimable_balances SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_operation_participants SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_operations SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_trades SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_transaction_claimable_balances SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_transaction_participants SET UNLOGGED;"
+	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE history_transactions SET UNLOGGED;"
 	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE offers SET UNLOGGED;"
 	psql "postgres://postgres:postgres@localhost:5432/horizon?sslmode=disable" -c "ALTER TABLE trust_lines SET UNLOGGED;"
 }
 
 /usr/local/go/bin/go build -v ./services/horizon
 ./horizon db migrate up
-convert_state_tables
+alter_tables_unlogged
 ./horizon ingest verify-range --from $FROM --to $TO --verify-state
 
 function compare() {
@@ -112,6 +125,7 @@ if [ ! -z "$VERIFY_HISTORY" ]; then
 	/usr/local/go/bin/go build -v ./services/horizon
 
 	./horizon db migrate up
+	alter_tables_unlogged
 	REINGEST_FROM=$((FROM + 1)) # verify-range does not ingest starting ledger
 	./horizon db reingest range $REINGEST_FROM $TO
 
