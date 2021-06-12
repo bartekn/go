@@ -50,7 +50,7 @@ func StreamChanges(
 			return nil
 		}
 		if err != nil {
-			return errors.Wrap(err, "could not read transaction")
+			return errors.Wrap(err, "could not read change")
 		}
 
 		if err = changeProcessor.ProcessChange(ctx, change); err != nil {

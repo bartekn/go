@@ -82,7 +82,7 @@ func (p *AssetStatsProcessor) Commit(ctx context.Context) error {
 		return p.assetStatsQ.InsertAssetStats(ctx, p.assetStatSet.All(), maxBatchSize)
 	}
 
-	changes := p.cache.GetChanges()
+	changes := p.cache.GetChangesMap()
 	for _, change := range changes {
 		var err error
 		switch change.Type {

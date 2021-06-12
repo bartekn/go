@@ -145,36 +145,33 @@ func (q *Q) UpdateTrustLine(ctx context.Context, entry xdr.LedgerEntry) (int64, 
 // There's currently no limit of the number of trust lines this method can
 // accept other than 2GB limit of the query string length what should be enough
 // for each ledger with the current limits.
-func (q *Q) UpsertTrustLines(ctx context.Context, trustLines []xdr.LedgerEntry) error {
-	var ledgerKey, accountID, assetIssuer, assetCode []string
-	var balance, limit, buyingLiabilities, sellingLiabilities []xdr.Int64
-	var flags, lastModifiedLedger []xdr.Uint32
-	var assetType []xdr.AssetType
-	var sponsor []null.String
+func (q *Q) UpsertTrustLines(ctx context.Context, trustLines []*TrustLine) error {
+	var ledgerKey = make([]string, 0, len(trustLines))
+	var accountID = make([]string, 0, len(trustLines))
+	var assetIssuer = make([]string, 0, len(trustLines))
+	var assetCode = make([]string, 0, len(trustLines))
+	var balance = make([]xdr.Int64, 0, len(trustLines))
+	var limit = make([]xdr.Int64, 0, len(trustLines))
+	var buyingLiabilities = make([]xdr.Int64, 0, len(trustLines))
+	var sellingLiabilities = make([]xdr.Int64, 0, len(trustLines))
+	var flags = make([]xdr.Uint32, 0, len(trustLines))
+	var lastModifiedLedger = make([]xdr.Uint32, 0, len(trustLines))
+	var assetType = make([]xdr.AssetType, 0, len(trustLines))
+	var sponsor = make([]null.String, 0, len(trustLines))
 
-	for _, entry := range trustLines {
-		if entry.Data.Type != xdr.LedgerEntryTypeTrustline {
-			return errors.Errorf("Invalid entry type: %d", entry.Data.Type)
-		}
-
-		key, err := trustLineEntryToLedgerKeyString(entry)
-		if err != nil {
-			return errors.Wrap(err, "Error running trustLineEntryToLedgerKeyString")
-		}
-
-		m := trustLineToMap(entry)
-		ledgerKey = append(ledgerKey, key)
-		accountID = append(accountID, m["account_id"].(string))
-		assetType = append(assetType, m["asset_type"].(xdr.AssetType))
-		assetIssuer = append(assetIssuer, m["asset_issuer"].(string))
-		assetCode = append(assetCode, m["asset_code"].(string))
-		balance = append(balance, m["balance"].(xdr.Int64))
-		limit = append(limit, m["trust_line_limit"].(xdr.Int64))
-		buyingLiabilities = append(buyingLiabilities, m["buying_liabilities"].(xdr.Int64))
-		sellingLiabilities = append(sellingLiabilities, m["selling_liabilities"].(xdr.Int64))
-		flags = append(flags, m["flags"].(xdr.Uint32))
-		lastModifiedLedger = append(lastModifiedLedger, m["last_modified_ledger"].(xdr.Uint32))
-		sponsor = append(sponsor, m["sponsor"].(null.String))
+	for _, trustLine := range trustLines {
+		ledgerKey = append(ledgerKey, trustLine.LedgerKey)
+		accountID = append(accountID, trustLine.AccountID)
+		assetType = append(assetType, trustLine.AssetType)
+		assetIssuer = append(assetIssuer, trustLine.AssetIssuer)
+		assetCode = append(assetCode, trustLine.AssetCode)
+		balance = append(balance, xdr.Int64(trustLine.Balance))
+		limit = append(limit, xdr.Int64(trustLine.Limit))
+		buyingLiabilities = append(buyingLiabilities, xdr.Int64(trustLine.BuyingLiabilities))
+		sellingLiabilities = append(sellingLiabilities, xdr.Int64(trustLine.SellingLiabilities))
+		flags = append(flags, xdr.Uint32(trustLine.Flags))
+		lastModifiedLedger = append(lastModifiedLedger, xdr.Uint32(trustLine.LastModifiedLedger))
+		sponsor = append(sponsor, trustLine.Sponsor)
 	}
 
 	sql := `

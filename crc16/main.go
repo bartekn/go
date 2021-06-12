@@ -94,12 +94,13 @@ var crc16tab = [256]uint16{
 // Checksum returns the 2-byte checksum for the provided data
 func Checksum(data []byte) []byte {
 	var crc uint16
-	var out bytes.Buffer
+	buf := make([]byte, 0, 2)
+	var out = bytes.NewBuffer(buf)
 	for _, b := range data {
 		crc = ((crc << 8) & 0xffff) ^ crc16tab[((crc>>8)^uint16(b))&0x00FF]
 	}
 
-	err := binary.Write(&out, binary.LittleEndian, crc)
+	err := binary.Write(out, binary.LittleEndian, crc)
 	if err != nil {
 		panic(err)
 	}

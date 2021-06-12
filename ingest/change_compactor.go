@@ -47,15 +47,20 @@ import (
 //    c. REMOVED it returns error because we can't remove an entry that was
 //       already removed.
 type ChangeCompactor struct {
-	// ledger key => Change
-	cache map[string]Change
-	mutex sync.Mutex
+	cache         map[oldLedgerKey]Change
+	ledgerKeyPool sync.Pool
+	mutex         sync.Mutex
 }
 
 // NewChangeCompactor returns a new ChangeCompactor.
 func NewChangeCompactor() *ChangeCompactor {
 	return &ChangeCompactor{
-		cache: make(map[string]Change),
+		cache: make(map[oldLedgerKey]Change),
+		ledgerKeyPool: sync.Pool{
+			New: func() interface{} {
+				return new(oldLedgerKey)
+			},
+		},
 	}
 }
 
@@ -85,32 +90,31 @@ func (c *ChangeCompactor) AddChange(change Change) error {
 // addCreatedChange adds a change to the cache, but returns an error if create
 // change is unexpected.
 func (c *ChangeCompactor) addCreatedChange(change Change) error {
-	ledgerKeyString, err := change.Post.LedgerKey().MarshalBinaryBase64()
-	if err != nil {
-		return errors.Wrap(err, "Error MarshalBinaryBase64")
-	}
+	xdrLedgerKey := change.Post.LedgerKey()
+	ledgerKey := c.ledgerKeyPool.Get().(*oldLedgerKey)
+	xdrLedgerKeyToLedgerKey(&xdrLedgerKey, ledgerKey)
 
-	existingChange, exist := c.cache[ledgerKeyString]
+	existingChange, exist := c.cache[*ledgerKey]
 	if !exist {
-		c.cache[ledgerKeyString] = change
+		c.cache[*ledgerKey] = change
 		return nil
 	}
 
 	switch existingChange.LedgerEntryChangeType() {
 	case xdr.LedgerEntryChangeTypeLedgerEntryCreated:
 		return NewStateError(errors.Errorf(
-			"can't create an entry that already exists (ledger key = %s)",
-			ledgerKeyString,
+			"can't create an entry that already exists (ledger key = %v)",
+			*ledgerKey,
 		))
 	case xdr.LedgerEntryChangeTypeLedgerEntryUpdated:
 		return NewStateError(errors.Errorf(
-			"can't create an entry that already exists (ledger key = %s)",
-			ledgerKeyString,
+			"can't create an entry that already exists (ledger key = %v)",
+			*ledgerKey,
 		))
 	case xdr.LedgerEntryChangeTypeLedgerEntryRemoved:
 		// If existing type is removed it means that this entry does exist
 		// in a DB so we update entry change.
-		c.cache[ledgerKeyString] = Change{
+		c.cache[*ledgerKey] = Change{
 			Type: change.Post.LedgerKey().Type,
 			Pre:  existingChange.Pre,
 			Post: change.Post,
@@ -119,20 +123,20 @@ func (c *ChangeCompactor) addCreatedChange(change Change) error {
 		return errors.Errorf("Unknown LedgerEntryChangeType: %d", existingChange.LedgerEntryChangeType())
 	}
 
+	c.ledgerKeyPool.Put(ledgerKey)
 	return nil
 }
 
 // addUpdatedChange adds a change to the cache, but returns an error if update
 // change is unexpected.
 func (c *ChangeCompactor) addUpdatedChange(change Change) error {
-	ledgerKeyString, err := change.Post.LedgerKey().MarshalBinaryBase64()
-	if err != nil {
-		return errors.Wrap(err, "Error MarshalBinaryBase64")
-	}
+	xdrLedgerKey := change.Post.LedgerKey()
+	ledgerKey := c.ledgerKeyPool.Get().(*oldLedgerKey)
+	xdrLedgerKeyToLedgerKey(&xdrLedgerKey, ledgerKey)
 
-	existingChange, exist := c.cache[ledgerKeyString]
+	existingChange, exist := c.cache[*ledgerKey]
 	if !exist {
-		c.cache[ledgerKeyString] = change
+		c.cache[*ledgerKey] = change
 		return nil
 	}
 
@@ -140,40 +144,40 @@ func (c *ChangeCompactor) addUpdatedChange(change Change) error {
 	case xdr.LedgerEntryChangeTypeLedgerEntryCreated:
 		// If existing type is created it means that this entry does not
 		// exist in a DB so we update entry change.
-		c.cache[ledgerKeyString] = Change{
+		c.cache[*ledgerKey] = Change{
 			Type: change.Post.LedgerKey().Type,
 			Pre:  existingChange.Pre, // = nil
 			Post: change.Post,
 		}
 	case xdr.LedgerEntryChangeTypeLedgerEntryUpdated:
-		c.cache[ledgerKeyString] = Change{
+		c.cache[*ledgerKey] = Change{
 			Type: change.Post.LedgerKey().Type,
 			Pre:  existingChange.Pre,
 			Post: change.Post,
 		}
 	case xdr.LedgerEntryChangeTypeLedgerEntryRemoved:
 		return NewStateError(errors.Errorf(
-			"can't update an entry that was previously removed (ledger key = %s)",
-			ledgerKeyString,
+			"can't update an entry that was previously removed (ledger key = %v)",
+			*ledgerKey,
 		))
 	default:
 		return errors.Errorf("Unknown LedgerEntryChangeType: %d", existingChange.Type)
 	}
 
+	c.ledgerKeyPool.Put(ledgerKey)
 	return nil
 }
 
 // addRemovedChange adds a change to the cache, but returns an error if remove
 // change is unexpected.
 func (c *ChangeCompactor) addRemovedChange(change Change) error {
-	ledgerKeyString, err := change.Pre.LedgerKey().MarshalBinaryBase64()
-	if err != nil {
-		return errors.Wrap(err, "Error MarshalBinaryBase64")
-	}
+	xdrLedgerKey := change.Pre.LedgerKey()
+	ledgerKey := c.ledgerKeyPool.Get().(*oldLedgerKey)
+	xdrLedgerKeyToLedgerKey(&xdrLedgerKey, ledgerKey)
 
-	existingChange, exist := c.cache[ledgerKeyString]
+	existingChange, exist := c.cache[*ledgerKey]
 	if !exist {
-		c.cache[ledgerKeyString] = change
+		c.cache[*ledgerKey] = change
 		return nil
 	}
 
@@ -181,22 +185,23 @@ func (c *ChangeCompactor) addRemovedChange(change Change) error {
 	case xdr.LedgerEntryChangeTypeLedgerEntryCreated:
 		// If existing type is created it means that this will be no op.
 		// Entry was created and is now removed in a single ledger.
-		delete(c.cache, ledgerKeyString)
+		delete(c.cache, *ledgerKey)
 	case xdr.LedgerEntryChangeTypeLedgerEntryUpdated:
-		c.cache[ledgerKeyString] = Change{
+		c.cache[*ledgerKey] = Change{
 			Type: change.Pre.LedgerKey().Type,
 			Pre:  existingChange.Pre,
 			Post: nil,
 		}
 	case xdr.LedgerEntryChangeTypeLedgerEntryRemoved:
 		return NewStateError(errors.Errorf(
-			"can't remove an entry that was previously removed (ledger key = %s)",
-			ledgerKeyString,
+			"can't remove an entry that was previously removed (ledger key = %v)",
+			*ledgerKey,
 		))
 	default:
 		return errors.Errorf("Unknown LedgerEntryChangeType: %d", existingChange.Type)
 	}
 
+	c.ledgerKeyPool.Put(ledgerKey)
 	return nil
 }
 
@@ -213,6 +218,14 @@ func (c *ChangeCompactor) GetChanges() []Change {
 	}
 
 	return changes
+}
+
+// GetChangesMap todo
+func (c *ChangeCompactor) GetChangesMap() map[oldLedgerKey]Change {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.cache
 }
 
 // Size returns number of ledger entries in the cache.

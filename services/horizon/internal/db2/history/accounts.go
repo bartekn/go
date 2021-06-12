@@ -62,7 +62,27 @@ func (q *Q) GetAccountsByIDs(ctx context.Context, ids []string) ([]AccountEntry,
 	return accounts, err
 }
 
-func accountToMap(entry xdr.LedgerEntry) map[string]interface{} {
+type AccountObj struct {
+	AccountID            string
+	InflationDestination string
+	HomeDomain           xdr.String32
+	Balance              xdr.Int64
+	BuyingLiabilities    xdr.Int64
+	SellingLiabilities   xdr.Int64
+	SequenceNumber       xdr.SequenceNumber
+	NumSubEntries        xdr.Uint32
+	Flags                xdr.Uint32
+	LastModifiedLedger   xdr.Uint32
+	NumSponsored         xdr.Uint32
+	NumSponsoring        xdr.Uint32
+	MasterWeight         uint8
+	ThresholdLow         uint8
+	ThresholdMedium      uint8
+	ThresholdHigh        uint8
+	Sponsor              null.String
+}
+
+func accountToMap(entry xdr.LedgerEntry) AccountObj {
 	account := entry.Data.MustAccount()
 	liabilities := account.Liabilities()
 
@@ -71,24 +91,24 @@ func accountToMap(entry xdr.LedgerEntry) map[string]interface{} {
 		inflationDestination = account.InflationDest.Address()
 	}
 
-	return map[string]interface{}{
-		"account_id":            account.AccountId.Address(),
-		"balance":               account.Balance,
-		"buying_liabilities":    liabilities.Buying,
-		"selling_liabilities":   liabilities.Selling,
-		"sequence_number":       account.SeqNum,
-		"num_subentries":        account.NumSubEntries,
-		"inflation_destination": inflationDestination,
-		"flags":                 account.Flags,
-		"home_domain":           account.HomeDomain,
-		"master_weight":         account.MasterKeyWeight(),
-		"threshold_low":         account.ThresholdLow(),
-		"threshold_medium":      account.ThresholdMedium(),
-		"threshold_high":        account.ThresholdHigh(),
-		"last_modified_ledger":  entry.LastModifiedLedgerSeq,
-		"sponsor":               ledgerEntrySponsorToNullString(entry),
-		"num_sponsored":         account.NumSponsored(),
-		"num_sponsoring":        account.NumSponsoring(),
+	return AccountObj{
+		AccountID:            account.AccountId.Address(),
+		Balance:              account.Balance,
+		BuyingLiabilities:    liabilities.Buying,
+		SellingLiabilities:   liabilities.Selling,
+		SequenceNumber:       account.SeqNum,
+		NumSubEntries:        account.NumSubEntries,
+		InflationDestination: inflationDestination,
+		Flags:                account.Flags,
+		HomeDomain:           account.HomeDomain,
+		MasterWeight:         account.MasterKeyWeight(),
+		ThresholdLow:         account.ThresholdLow(),
+		ThresholdMedium:      account.ThresholdMedium(),
+		ThresholdHigh:        account.ThresholdHigh(),
+		LastModifiedLedger:   entry.LastModifiedLedgerSeq,
+		Sponsor:              ledgerEntrySponsorToNullString(entry),
+		NumSponsored:         account.NumSponsored(),
+		NumSponsoring:        account.NumSponsoring(),
 	}
 }
 
@@ -97,13 +117,23 @@ func accountToMap(entry xdr.LedgerEntry) map[string]interface{} {
 // accept other than 2GB limit of the query string length what should be enough
 // for each ledger with the current limits.
 func (q *Q) UpsertAccounts(ctx context.Context, accounts []xdr.LedgerEntry) error {
-	var accountID, inflationDestination []string
-	var homeDomain []xdr.String32
-	var balance, buyingLiabilities, sellingLiabilities []xdr.Int64
-	var sequenceNumber []xdr.SequenceNumber
-	var numSubEntries, flags, lastModifiedLedger, numSponsored, numSponsoring []xdr.Uint32
-	var masterWeight, thresholdLow, thresholdMedium, thresholdHigh []uint8
-	var sponsor []null.String
+	var accountID = make([]string, 0, len(accounts))
+	var inflationDestination = make([]string, 0, len(accounts))
+	var homeDomain = make([]xdr.String32, 0, len(accounts))
+	var balance = make([]xdr.Int64, 0, len(accounts))
+	var buyingLiabilities = make([]xdr.Int64, 0, len(accounts))
+	var sellingLiabilities = make([]xdr.Int64, 0, len(accounts))
+	var sequenceNumber = make([]xdr.SequenceNumber, 0, len(accounts))
+	var numSubEntries = make([]xdr.Uint32, 0, len(accounts))
+	var flags = make([]xdr.Uint32, 0, len(accounts))
+	var lastModifiedLedger = make([]xdr.Uint32, 0, len(accounts))
+	var numSponsored = make([]xdr.Uint32, 0, len(accounts))
+	var numSponsoring = make([]xdr.Uint32, 0, len(accounts))
+	var masterWeight = make([]uint8, 0, len(accounts))
+	var thresholdLow = make([]uint8, 0, len(accounts))
+	var thresholdMedium = make([]uint8, 0, len(accounts))
+	var thresholdHigh = make([]uint8, 0, len(accounts))
+	var sponsor = make([]null.String, 0, len(accounts))
 
 	for _, entry := range accounts {
 		if entry.Data.Type != xdr.LedgerEntryTypeAccount {
@@ -111,23 +141,23 @@ func (q *Q) UpsertAccounts(ctx context.Context, accounts []xdr.LedgerEntry) erro
 		}
 
 		m := accountToMap(entry)
-		accountID = append(accountID, m["account_id"].(string))
-		balance = append(balance, m["balance"].(xdr.Int64))
-		buyingLiabilities = append(buyingLiabilities, m["buying_liabilities"].(xdr.Int64))
-		sellingLiabilities = append(sellingLiabilities, m["selling_liabilities"].(xdr.Int64))
-		sequenceNumber = append(sequenceNumber, m["sequence_number"].(xdr.SequenceNumber))
-		numSubEntries = append(numSubEntries, m["num_subentries"].(xdr.Uint32))
-		inflationDestination = append(inflationDestination, m["inflation_destination"].(string))
-		flags = append(flags, m["flags"].(xdr.Uint32))
-		homeDomain = append(homeDomain, m["home_domain"].(xdr.String32))
-		masterWeight = append(masterWeight, m["master_weight"].(uint8))
-		thresholdLow = append(thresholdLow, m["threshold_low"].(uint8))
-		thresholdMedium = append(thresholdMedium, m["threshold_medium"].(uint8))
-		thresholdHigh = append(thresholdHigh, m["threshold_high"].(uint8))
-		lastModifiedLedger = append(lastModifiedLedger, m["last_modified_ledger"].(xdr.Uint32))
-		sponsor = append(sponsor, m["sponsor"].(null.String))
-		numSponsored = append(numSponsored, m["num_sponsored"].(xdr.Uint32))
-		numSponsoring = append(numSponsoring, m["num_sponsoring"].(xdr.Uint32))
+		accountID = append(accountID, m.AccountID)
+		balance = append(balance, m.Balance)
+		buyingLiabilities = append(buyingLiabilities, m.BuyingLiabilities)
+		sellingLiabilities = append(sellingLiabilities, m.SellingLiabilities)
+		sequenceNumber = append(sequenceNumber, m.SequenceNumber)
+		numSubEntries = append(numSubEntries, m.NumSubEntries)
+		inflationDestination = append(inflationDestination, m.InflationDestination)
+		flags = append(flags, m.Flags)
+		homeDomain = append(homeDomain, m.HomeDomain)
+		masterWeight = append(masterWeight, m.MasterWeight)
+		thresholdLow = append(thresholdLow, m.ThresholdLow)
+		thresholdMedium = append(thresholdMedium, m.ThresholdMedium)
+		thresholdHigh = append(thresholdHigh, m.ThresholdHigh)
+		lastModifiedLedger = append(lastModifiedLedger, m.LastModifiedLedger)
+		sponsor = append(sponsor, m.Sponsor)
+		numSponsored = append(numSponsored, m.NumSponsored)
+		numSponsoring = append(numSponsoring, m.NumSponsoring)
 	}
 
 	sql := `

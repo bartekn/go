@@ -702,6 +702,7 @@ type TransactionsQ struct {
 
 // TrustLine is row of data from the `trust_lines` table from horizon DB
 type TrustLine struct {
+	LedgerKey          string        `db:"ledger_key"`
 	AccountID          string        `db:"account_id"`
 	AssetType          xdr.AssetType `db:"asset_type"`
 	AssetIssuer        string        `db:"asset_issuer"`
@@ -721,7 +722,7 @@ type QTrustLines interface {
 	GetTrustLinesByKeys(ctx context.Context, keys []xdr.LedgerKeyTrustLine) ([]TrustLine, error)
 	InsertTrustLine(ctx context.Context, entry xdr.LedgerEntry) (int64, error)
 	UpdateTrustLine(ctx context.Context, entry xdr.LedgerEntry) (int64, error)
-	UpsertTrustLines(ctx context.Context, entries []xdr.LedgerEntry) error
+	UpsertTrustLines(ctx context.Context, entries []*TrustLine) error
 	RemoveTrustLine(ctx context.Context, key xdr.LedgerKeyTrustLine) (int64, error)
 }
 

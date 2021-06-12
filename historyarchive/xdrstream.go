@@ -9,14 +9,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding"
 	"encoding/binary"
-	"fmt"
 	"hash"
 	"io"
 	"io/ioutil"
 
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/xdr"
+	goxdr "github.com/xdrpp/goxdr/xdr"
 )
 
 type XdrStream struct {
@@ -140,7 +141,7 @@ func (x *XdrStream) closeReaders() error {
 	return nil
 }
 
-func (x *XdrStream) ReadOne(in interface{}) error {
+func (x *XdrStream) ReadOneGxdr(in goxdr.XdrType) error {
 	var nbytes uint32
 	err := binary.Read(x.rdr, binary.BigEndian, &nbytes)
 	if err != nil {
@@ -168,15 +169,49 @@ func (x *XdrStream) ReadOne(in interface{}) error {
 		return errors.New("Read wrong number of bytes from XDR")
 	}
 
-	readi, err := xdr.Unmarshal(&x.buf, in)
+	reader := goxdr.XdrIn{In: &x.buf}
+	reader.Marshal("", in)
+
+	return nil
+}
+
+func (x *XdrStream) ReadOne(in encoding.BinaryUnmarshaler) error {
+	var nbytes uint32
+	err := binary.Read(x.rdr, binary.BigEndian, &nbytes)
+	if err != nil {
+		x.rdr.Close()
+		if err == io.EOF {
+			// Do not wrap io.EOF
+			return err
+		}
+		return errors.Wrap(err, "binary.Read error")
+	}
+	nbytes &= 0x7fffffff
+	x.buf.Reset()
+	if nbytes == 0 {
+		x.rdr.Close()
+		return io.EOF
+	}
+	x.buf.Grow(int(nbytes))
+	read, err := x.buf.ReadFrom(io.LimitReader(x.rdr, int64(nbytes)))
 	if err != nil {
 		x.rdr.Close()
 		return err
 	}
-	if int64(readi) != int64(nbytes) {
-		return fmt.Errorf("Unmarshalled %d bytes from XDR, expected %d)",
-			readi, nbytes)
+	if read != int64(nbytes) {
+		x.rdr.Close()
+		return errors.New("Read wrong number of bytes from XDR")
 	}
+
+	err = in.UnmarshalBinary(x.buf.Bytes())
+	if err != nil {
+		x.rdr.Close()
+		return err
+	}
+	// if int64(readi) != int64(nbytes) {
+	// 	return fmt.Errorf("Unmarshalled %d bytes from XDR, expected %d)",
+	// 		readi, nbytes)
+	// }
 	return nil
 }
 

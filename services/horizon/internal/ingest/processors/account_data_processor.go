@@ -50,7 +50,7 @@ func (p *AccountDataProcessor) ProcessChange(ctx context.Context, change ingest.
 func (p *AccountDataProcessor) Commit(ctx context.Context) error {
 	batch := p.dataQ.NewAccountDataBatchInsertBuilder(maxBatchSize)
 
-	changes := p.cache.GetChanges()
+	changes := p.cache.GetChangesMap()
 	for _, change := range changes {
 		var err error
 		var rowsAffected int64

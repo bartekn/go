@@ -13,7 +13,7 @@ type accountsBatchInsertBuilder struct {
 }
 
 func (i *accountsBatchInsertBuilder) Add(ctx context.Context, entry xdr.LedgerEntry) error {
-	return i.builder.Row(ctx, accountToMap(entry))
+	return i.builder.Row(ctx, map[string]interface{}{})
 }
 
 func (i *accountsBatchInsertBuilder) Exec(ctx context.Context) error {

@@ -317,6 +317,66 @@ func (b buildState) run(s *system) (transition, error) {
 	}).Info("Processing state")
 	startTime := time.Now()
 
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX trust_lines_pkey;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX trust_lines_by_account_id;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX signers_by_account;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX accounts_pkey;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX accounts_by_sponsor;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX accounts_home_domain;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX accounts_inflation_destination;")
+	if err != nil {
+		panic(err)
+	}	panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX trust_lines_by_issuer;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX trust_lines_by_sponsor;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX trust_lines_by_type_code_issuer;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX accounts_signers_pkey;")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = s.historyQ.GetTx().Exec("DROP INDEX accounts_signers_by_sponsor;")
+	if err != nil {
+	
+
 	var stats ingest.StatsChangeProcessorResults
 	if b.checkpointLedger == 1 {
 		stats, err = s.runner.RunGenesisStateIngestion()

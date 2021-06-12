@@ -50,7 +50,7 @@ func (p *ClaimableBalancesChangeProcessor) ProcessChange(ctx context.Context, ch
 func (p *ClaimableBalancesChangeProcessor) Commit(ctx context.Context) error {
 	batch := p.qClaimableBalances.NewClaimableBalancesBatchInsertBuilder(maxBatchSize)
 
-	changes := p.cache.GetChanges()
+	changes := p.cache.GetChangesMap()
 	for _, change := range changes {
 		var err error
 		var rowsAffected int64

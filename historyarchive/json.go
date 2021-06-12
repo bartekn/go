@@ -6,6 +6,7 @@ package historyarchive
 
 import (
 	"compress/gzip"
+	"encoding"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,7 +18,7 @@ import (
 )
 
 func DumpXdrAsJson(args []string) error {
-	var tmp interface{}
+	var tmp encoding.BinaryUnmarshaler
 	var rdr io.ReadCloser
 	var err error
 
@@ -58,7 +59,7 @@ func DumpXdrAsJson(args []string) error {
 				return fmt.Errorf("Error: unrecognized XDR file type %s", base)
 			}
 
-			if err = xr.ReadOne(&tmp); err != nil {
+			if err = xr.ReadOne(tmp); err != nil {
 				if err == io.EOF {
 					break
 				} else {

@@ -66,12 +66,12 @@ func (p *OffersProcessor) ledgerEntryToRow(entry *xdr.LedgerEntry) history.Offer
 		Price:              float64(offer.Price.N) / float64(offer.Price.D),
 		Flags:              int32(offer.Flags),
 		LastModifiedLedger: uint32(entry.LastModifiedLedgerSeq),
-		Sponsor:            ledgerEntrySponsorToNullString(*entry),
+		Sponsor:            ledgerEntrySponsorToNullString(entry),
 	}
 }
 
 func (p *OffersProcessor) flushCache(ctx context.Context) error {
-	changes := p.cache.GetChanges()
+	changes := p.cache.GetChangesMap()
 	for _, change := range changes {
 		var rowsAffected int64
 		var err error

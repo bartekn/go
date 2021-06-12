@@ -8,9 +8,9 @@ import (
 
 var log = logpkg.DefaultLogger.WithField("service", "ingest")
 
-const maxBatchSize = 100000
+const maxBatchSize = 500000
 
-func ledgerEntrySponsorToNullString(entry xdr.LedgerEntry) null.String {
+func ledgerEntrySponsorToNullString(entry *xdr.LedgerEntry) null.String {
 	sponsoringID := entry.SponsoringID()
 
 	var sponsor null.String

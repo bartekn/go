@@ -49,8 +49,8 @@ func (p *AccountsProcessor) ProcessChange(ctx context.Context, change ingest.Cha
 func (p *AccountsProcessor) Commit(ctx context.Context) error {
 	batchUpsertAccounts := []xdr.LedgerEntry{}
 
-	changes := p.cache.GetChanges()
-	for _, change := range changes {
+	changesMap := p.cache.GetChangesMap()
+	for _, change := range changesMap {
 		changed, err := change.AccountChangedExceptSigners()
 		if err != nil {
 			return errors.Wrap(err, "Error running change.AccountChangedExceptSigners")

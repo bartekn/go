@@ -2,11 +2,12 @@ package ingest
 
 import (
 	"context"
-	"encoding/base64"
+	"fmt"
 	"io"
 	"sync"
 	"time"
 
+	"github.com/stellar/go/gxdr"
 	"github.com/stellar/go/historyarchive"
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/xdr"
@@ -32,6 +33,8 @@ type CheckpointChangeReader struct {
 	closeOnce  sync.Once
 	done       chan bool
 
+	ledgerKeyPool sync.Pool
+
 	// This should be set to true in tests only
 	disableBucketListHashValidation bool
 	sleep                           func(time.Duration)
@@ -45,14 +48,11 @@ var _ ChangeReader = &CheckpointChangeReader{}
 // does not need to be thread-safe.
 type tempSet interface {
 	Open() error
-	// Preload batch-loads keys into internal cache (if a store has any) to
-	// improve execution time by removing many round-trips.
-	Preload(keys []string) error
 	// Add adds key to the store.
-	Add(key string) error
+	Add(key *ledgerKey) error
 	// Exist returns value true if the value is found in the store.
 	// If the value has not been set, it should return false.
-	Exist(key string) (bool, error)
+	Exist(key *ledgerKey) (bool, error)
 	Close() error
 }
 
@@ -60,12 +60,12 @@ const (
 	// maxStreamRetries defines how many times should we retry when there are errors in
 	// the xdr stream returned by GetXdrStreamForHash().
 	maxStreamRetries = 3
-	msrBufferSize    = 50000
+	msrBufferSize    = 2000000
 
 	// preloadedEntries defines a number of bucket entries to preload from a
 	// bucket in a single run. This is done to allow preloading keys from
 	// temp set.
-	preloadedEntries = 20000
+	// preloadedEntries = 20000
 
 	sleepDuration = time.Second
 )
@@ -116,6 +116,11 @@ func NewCheckpointChangeReader(
 		closeOnce:  sync.Once{},
 		done:       make(chan bool),
 		sleep:      time.Sleep,
+		ledgerKeyPool: sync.Pool{
+			New: func() interface{} {
+				return new(ledgerKey)
+			},
+		},
 	}, nil
 }
 
@@ -212,15 +217,188 @@ func (r *CheckpointChangeReader) streamBuckets() {
 	}
 }
 
+type ledgerKey struct {
+	Type gxdr.LedgerEntryType
+	// Account, Trustline, Data
+	AccountId gxdr.Uint256
+	// Trustline
+	AssetCode4  gxdr.AssetCode4
+	AssetCode12 gxdr.AssetCode12
+	Issuer      gxdr.Uint256
+	// Offer
+	SellerId gxdr.Uint256
+	OfferId  gxdr.Int64
+	// Data
+	DataName gxdr.String64
+	// ClaimableBalance
+	BalanceId gxdr.Hash
+}
+
+func (l *ledgerKey) Reset() {
+	l.Type = 0
+	for i := 0; i < len(l.AccountId); i++ {
+		l.AccountId[i] = 0
+	}
+	for i := 0; i < len(l.AssetCode4); i++ {
+		l.AssetCode4[i] = 0
+	}
+	for i := 0; i < len(l.AssetCode12); i++ {
+		l.AssetCode12[i] = 0
+	}
+	for i := 0; i < len(l.Issuer); i++ {
+		l.Issuer[i] = 0
+	}
+	for i := 0; i < len(l.SellerId); i++ {
+		l.SellerId[i] = 0
+	}
+	l.OfferId = 0
+	l.DataName = ""
+	for i := 0; i < len(l.BalanceId); i++ {
+		l.BalanceId[i] = 0
+	}
+}
+
+type oldLedgerKey struct {
+	Type xdr.LedgerEntryType
+	// Account, Trustline, Data
+	AccountId xdr.Uint256
+	// Trustline
+	AssetCode4  xdr.AssetCode4
+	AssetCode12 xdr.AssetCode12
+	Issuer      xdr.Uint256
+	// Offer
+	SellerId xdr.Uint256
+	OfferId  xdr.Int64
+	// Data
+	DataName xdr.String64
+	// ClaimableBalance
+	BalanceId xdr.Hash
+}
+
+func (l *oldLedgerKey) Reset() {
+	l.Type = 0
+	for i := 0; i < len(l.AccountId); i++ {
+		l.AccountId[i] = 0
+	}
+	for i := 0; i < len(l.AssetCode4); i++ {
+		l.AssetCode4[i] = 0
+	}
+	for i := 0; i < len(l.AssetCode12); i++ {
+		l.AssetCode12[i] = 0
+	}
+	for i := 0; i < len(l.Issuer); i++ {
+		l.Issuer[i] = 0
+	}
+	for i := 0; i < len(l.SellerId); i++ {
+		l.SellerId[i] = 0
+	}
+	l.OfferId = 0
+	l.DataName = ""
+	for i := 0; i < len(l.BalanceId); i++ {
+		l.BalanceId[i] = 0
+	}
+}
+
+func xdrLedgerKeyToLedgerKey(key *xdr.LedgerKey, newKey *oldLedgerKey) {
+	newKey.Reset()
+
+	newKey.Type = key.Type
+	switch key.Type {
+	case xdr.LedgerEntryTypeAccount:
+		newKey.AccountId = *key.Account.AccountId.Ed25519
+	case xdr.LedgerEntryTypeTrustline:
+		newKey.AccountId = *key.TrustLine.AccountId.Ed25519
+		switch key.TrustLine.Asset.Type {
+		case xdr.AssetTypeAssetTypeCreditAlphanum4:
+			newKey.AssetCode4 = key.TrustLine.Asset.AlphaNum4.AssetCode
+			newKey.Issuer = *key.TrustLine.Asset.AlphaNum4.Issuer.Ed25519
+		case xdr.AssetTypeAssetTypeCreditAlphanum12:
+			newKey.AssetCode12 = key.TrustLine.Asset.AlphaNum12.AssetCode
+			newKey.Issuer = *key.TrustLine.Asset.AlphaNum12.Issuer.Ed25519
+		}
+	case xdr.LedgerEntryTypeOffer:
+		newKey.SellerId = *key.Offer.SellerId.Ed25519
+		newKey.OfferId = key.Offer.OfferId
+	case xdr.LedgerEntryTypeData:
+		newKey.AccountId = *key.Data.AccountId.Ed25519
+		newKey.DataName = key.Data.DataName
+	case xdr.LedgerEntryTypeClaimableBalance:
+		newKey.BalanceId = *key.ClaimableBalance.BalanceId.V0
+	default:
+		panic(errors.Errorf("Invalid LedgerEntryType=%d", key.Type))
+	}
+}
+
+func gxdrLedgerEntryToLedgerKey(entry *gxdr.LedgerEntry, newKey *ledgerKey) {
+	newKey.Reset()
+
+	newKey.Type = entry.Data.Type
+	switch entry.Data.Type {
+	case gxdr.ACCOUNT:
+		newKey.AccountId = *entry.Data.Account().AccountID.Ed25519()
+	case gxdr.TRUSTLINE:
+		trustLine := entry.Data.TrustLine()
+		newKey.AccountId = *trustLine.AccountID.Ed25519()
+		switch trustLine.Asset.Type {
+		case gxdr.ASSET_TYPE_CREDIT_ALPHANUM4:
+			newKey.AssetCode4 = trustLine.Asset.AlphaNum4().AssetCode
+			newKey.Issuer = *trustLine.Asset.AlphaNum4().Issuer.Ed25519()
+		case gxdr.ASSET_TYPE_CREDIT_ALPHANUM12:
+			newKey.AssetCode12 = trustLine.Asset.AlphaNum12().AssetCode
+			newKey.Issuer = *trustLine.Asset.AlphaNum12().Issuer.Ed25519()
+		}
+	case gxdr.OFFER:
+		newKey.SellerId = *entry.Data.Offer().SellerID.Ed25519()
+		newKey.OfferId = entry.Data.Offer().OfferID
+	case gxdr.DATA:
+		newKey.AccountId = *entry.Data.Data().AccountID.Ed25519()
+		newKey.DataName = entry.Data.Data().DataName
+	case gxdr.CLAIMABLE_BALANCE:
+		newKey.BalanceId = *entry.Data.ClaimableBalance().BalanceID.V0()
+	default:
+		panic(errors.Errorf("Invalid LedgerEntryType=%d", entry.Data.Type))
+	}
+}
+
+func gxdrLedgerKeyToLedgerKey(key *gxdr.LedgerKey, newKey *ledgerKey) {
+	newKey.Reset()
+
+	newKey.Type = key.Type
+	switch key.Type {
+	case gxdr.ACCOUNT:
+		newKey.AccountId = *key.Account().AccountID.Ed25519()
+	case gxdr.TRUSTLINE:
+		newKey.AccountId = *key.TrustLine().AccountID.Ed25519()
+		switch key.TrustLine().Asset.Type {
+		case gxdr.ASSET_TYPE_CREDIT_ALPHANUM4:
+			newKey.AssetCode4 = key.TrustLine().Asset.AlphaNum4().AssetCode
+			newKey.Issuer = *key.TrustLine().Asset.AlphaNum4().Issuer.Ed25519()
+		case gxdr.ASSET_TYPE_CREDIT_ALPHANUM12:
+			newKey.AssetCode12 = key.TrustLine().Asset.AlphaNum12().AssetCode
+			newKey.Issuer = *key.TrustLine().Asset.AlphaNum12().Issuer.Ed25519()
+		}
+	case gxdr.OFFER:
+		newKey.SellerId = *key.Offer().SellerID.Ed25519()
+		newKey.OfferId = key.Offer().OfferID
+	case gxdr.DATA:
+		newKey.AccountId = *key.Data().AccountID.Ed25519()
+		newKey.DataName = key.Data().DataName
+	case gxdr.CLAIMABLE_BALANCE:
+		newKey.BalanceId = *key.ClaimableBalance().BalanceID.V0()
+	default:
+		panic(errors.Errorf("Invalid LedgerEntryType=%d", key.Type))
+	}
+}
+
 // readBucketEntry will attempt to read a bucket entry from `stream`.
 // If any errors are encountered while reading from `stream`, readBucketEntry will
 // retry the operation using a new *historyarchive.XdrStream.
 // The total number of retries will not exceed `maxStreamRetries`.
 func (r *CheckpointChangeReader) readBucketEntry(stream *historyarchive.XdrStream, hash historyarchive.Hash) (
-	xdr.BucketEntry,
+	gxdr.BucketEntry,
 	error,
 ) {
-	var entry xdr.BucketEntry
+	var entry gxdr.BucketEntry
 	var err error
 	currentPosition := stream.BytesRead()
 
@@ -230,7 +408,7 @@ func (r *CheckpointChangeReader) readBucketEntry(stream *historyarchive.XdrStrea
 			break
 		}
 		if err == nil {
-			err = stream.ReadOne(&entry)
+			err = stream.ReadOneGxdr(&entry)
 			if err == nil || err == io.EOF {
 				break
 			}
@@ -274,6 +452,10 @@ func (r *CheckpointChangeReader) newXDRStream(hash historyarchive.Hash) (
 	return rdr, e
 }
 
+var (
+	entriesAdded int
+)
+
 // streamBucketContents pushes value onto the read channel, returning false when the channel needs to be closed otherwise true
 func (r *CheckpointChangeReader) streamBucketContents(hash historyarchive.Hash, oldestBucket bool) bool {
 	rdr, e := r.newXDRStream(hash)
@@ -298,82 +480,65 @@ func (r *CheckpointChangeReader) streamBucketContents(hash historyarchive.Hash, 
 	bucketProtocolVersion := uint32(0)
 
 	n := -1
-	var batch []xdr.BucketEntry
-	lastBatch := false
+	// var batch []gxdr.BucketEntry
+	// lastBatch := false
 
 LoopBucketEntry:
 	for {
 		// Preload entries for faster retrieve from temp store.
-		if len(batch) == 0 {
-			if lastBatch {
+		// if len(batch) == 0 {
+		// 	if lastBatch {
+		// 		return true
+		// 	}
+
+		// 	for i := 0; i < preloadedEntries; i++ {
+		// 		var entry gxdr.BucketEntry
+		// 		entry, e = r.readBucketEntry(rdr, hash)
+		// 		if e != nil {
+		// 			if e == io.EOF {
+		// 				if len(batch) == 0 {
+		// 					// No entries loaded for this batch, nothing more to process
+		// 					return true
+		// 				}
+		// 				lastBatch = true
+		// 				break
+		// 			}
+		// 			r.readChan <- r.error(
+		// 				errors.Wrapf(e, "Error on XDR record %d of hash '%s'", n, hash.String()),
+		// 			)
+		// 			return false
+		// 		}
+
+		// 		batch = append(batch, entry)
+		// 	}
+		// }
+
+		// var entry gxdr.BucketEntry
+		// entry, batch = batch[0], batch[1:]
+
+		entry, e := r.readBucketEntry(rdr, hash)
+		if e != nil {
+			if e == io.EOF {
+				// if len(batch) == 0 {
+				// 	// No entries loaded for this batch, nothing more to process
+				// 	return true
+				// }
+				// lastBatch = true
+				// break
 				return true
 			}
-
-			preloadKeys := []string{}
-
-			for i := 0; i < preloadedEntries; i++ {
-				var entry xdr.BucketEntry
-				entry, e = r.readBucketEntry(rdr, hash)
-				if e != nil {
-					if e == io.EOF {
-						if len(batch) == 0 {
-							// No entries loaded for this batch, nothing more to process
-							return true
-						}
-						lastBatch = true
-						break
-					}
-					r.readChan <- r.error(
-						errors.Wrapf(e, "Error on XDR record %d of hash '%s'", n, hash.String()),
-					)
-					return false
-				}
-
-				batch = append(batch, entry)
-
-				// Generate a key
-				var key xdr.LedgerKey
-
-				switch entry.Type {
-				case xdr.BucketEntryTypeLiveentry, xdr.BucketEntryTypeInitentry:
-					liveEntry := entry.MustLiveEntry()
-					key = liveEntry.LedgerKey()
-				case xdr.BucketEntryTypeDeadentry:
-					key = entry.MustDeadEntry()
-				default:
-					// No ledger key associated with this entry, continue to the next one.
-					continue
-				}
-
-				// We're using compressed keys here
-				keyBytes, e := key.MarshalBinaryCompress()
-				if e != nil {
-					r.readChan <- r.error(
-						errors.Wrapf(e, "Error marshaling XDR record %d of hash '%s'", n, hash.String()),
-					)
-					return false
-				}
-
-				h := base64.StdEncoding.EncodeToString(keyBytes)
-				preloadKeys = append(preloadKeys, h)
-			}
-
-			err := r.tempStore.Preload(preloadKeys)
-			if err != nil {
-				r.readChan <- r.error(errors.Wrap(err, "Error preloading keys"))
-				return false
-			}
+			r.readChan <- r.error(
+				errors.Wrapf(e, "Error on XDR record %d of hash '%s'", n, hash.String()),
+			)
+			return false
 		}
-
-		var entry xdr.BucketEntry
-		entry, batch = batch[0], batch[1:]
 
 		n++
 
-		var key xdr.LedgerKey
+		key := r.ledgerKeyPool.Get().(*ledgerKey)
 
 		switch entry.Type {
-		case xdr.BucketEntryTypeMetaentry:
+		case gxdr.METAENTRY:
 			if n != 0 {
 				r.readChan <- r.error(
 					errors.Errorf(
@@ -385,13 +550,13 @@ LoopBucketEntry:
 			}
 			// We can't use MustMetaEntry() here. Check:
 			// https://github.com/golang/go/issues/32560
-			bucketProtocolVersion = uint32(entry.MetaEntry.LedgerVersion)
+			bucketProtocolVersion = uint32(entry.MetaEntry().LedgerVersion)
 			continue LoopBucketEntry
-		case xdr.BucketEntryTypeLiveentry, xdr.BucketEntryTypeInitentry:
-			liveEntry := entry.MustLiveEntry()
-			key = liveEntry.LedgerKey()
-		case xdr.BucketEntryTypeDeadentry:
-			key = entry.MustDeadEntry()
+		case gxdr.LIVEENTRY, gxdr.INITENTRY:
+			liveEntry := entry.LiveEntry()
+			gxdrLedgerEntryToLedgerKey(liveEntry, key)
+		case gxdr.DEADENTRY:
+			gxdrLedgerKeyToLedgerKey(entry.DeadEntry(), key)
 		default:
 			r.readChan <- r.error(
 				errors.Errorf("Unknown BucketEntryType=%d: %d@%s", entry.Type, n, hash.String()),
@@ -399,49 +564,45 @@ LoopBucketEntry:
 			return false
 		}
 
-		// We're using compressed keys here
-		keyBytes, e := key.MarshalBinaryCompress()
-		if e != nil {
-			r.readChan <- r.error(
-				errors.Wrapf(
-					e, "Error marshaling XDR record %d of hash '%s'", n, hash.String(),
-				),
-			)
-			return false
-		}
-
-		h := base64.StdEncoding.EncodeToString(keyBytes)
-
 		switch entry.Type {
-		case xdr.BucketEntryTypeLiveentry, xdr.BucketEntryTypeInitentry:
-			if entry.Type == xdr.BucketEntryTypeInitentry && bucketProtocolVersion < 11 {
+		case gxdr.LIVEENTRY, gxdr.INITENTRY:
+			if entry.Type == gxdr.INITENTRY && bucketProtocolVersion < 11 {
 				r.readChan <- r.error(
 					errors.Errorf("Read INITENTRY from version <11 bucket: %d@%s", n, hash.String()),
 				)
 				return false
 			}
 
-			seen, err := r.tempStore.Exist(h)
+			seen, err := r.tempStore.Exist(key)
+			r.ledgerKeyPool.Put(key)
 			if err != nil {
 				r.readChan <- r.error(errors.Wrap(err, "Error reading from tempStore"))
 				return false
 			}
 
 			if !seen {
+				newLiveEntry := entry.LiveEntry()
+				oldLiveEntry := xdr.LedgerEntry{}
+				gxdr.Convert(newLiveEntry, &oldLiveEntry)
+				if err != nil {
+					r.readChan <- r.error(errors.Wrap(err, "Error converting"))
+					return false
+				}
+
 				// Return LEDGER_ENTRY_STATE changes only now.
-				liveEntry := entry.MustLiveEntry()
 				entryChange := xdr.LedgerEntryChange{
 					Type:  xdr.LedgerEntryChangeTypeLedgerEntryState,
-					State: &liveEntry,
+					State: &oldLiveEntry,
 				}
 				r.readChan <- readResult{entryChange, nil}
+				entriesAdded++
 
 				// We don't update `tempStore` for INITENTRY because CAP-20 says:
 				// > a bucket entry marked INITENTRY implies that either no entry
 				// > with the same ledger key exists in an older bucket, or else
 				// > that the (chronologically) preceding entry with the same ledger
 				// > key was DEADENTRY.
-				if entry.Type == xdr.BucketEntryTypeLiveentry {
+				if entry.Type == gxdr.LIVEENTRY {
 					// We skip adding entries from the last bucket to tempStore because:
 					// 1. Ledger keys are unique within a single bucket.
 					// 2. This is the last bucket we process so there's no need to track
@@ -449,15 +610,17 @@ LoopBucketEntry:
 					if oldestBucket {
 						continue
 					}
-					err := r.tempStore.Add(h)
+					err := r.tempStore.Add(key)
+					r.ledgerKeyPool.Put(key)
 					if err != nil {
 						r.readChan <- r.error(errors.Wrap(err, "Error updating to tempStore"))
 						return false
 					}
 				}
 			}
-		case xdr.BucketEntryTypeDeadentry:
-			err := r.tempStore.Add(h)
+		case gxdr.DEADENTRY:
+			err := r.tempStore.Add(key)
+			r.ledgerKeyPool.Put(key)
 			if err != nil {
 				r.readChan <- r.error(errors.Wrap(err, "Error writing to tempStore"))
 				return false
@@ -485,6 +648,24 @@ LoopBucketEntry:
 func (r *CheckpointChangeReader) Read() (Change, error) {
 	r.streamOnce.Do(func() {
 		go r.streamBuckets()
+		go func() {
+			prev := 0
+			secondsWait := 0
+			secondsBusy := 0
+			for {
+				time.Sleep(time.Second)
+				read := entriesAdded
+				if read != 2887375 {
+					if read == prev {
+						secondsWait++
+					} else {
+						secondsBusy++
+					}
+				}
+				prev = read
+				fmt.Println("chan len", len(r.readChan), "entriesAdded", entriesAdded, "busy", secondsBusy, "wait", secondsWait)
+			}
+		}()
 	})
 
 	// blocking call. anytime we consume from this channel, the background goroutine will stream in the next value

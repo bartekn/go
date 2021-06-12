@@ -90,7 +90,7 @@ func (p *SignersProcessor) Commit(ctx context.Context) error {
 		return p.batch.Exec(ctx)
 	}
 
-	changes := p.cache.GetChanges()
+	changes := p.cache.GetChangesMap()
 	for _, change := range changes {
 		if !change.AccountSignersChanged() {
 			continue

@@ -2,6 +2,9 @@ package processors
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
+	"sync"
 
 	"github.com/stellar/go/ingest"
 	"github.com/stellar/go/services/horizon/internal/db2/history"
@@ -10,7 +13,8 @@ import (
 )
 
 type TrustLinesProcessor struct {
-	trustLinesQ history.QTrustLines
+	trustLinesQ   history.QTrustLines
+	dbObjectsPool sync.Pool
 
 	cache *ingest.ChangeCompactor
 }
@@ -18,6 +22,11 @@ type TrustLinesProcessor struct {
 func NewTrustLinesProcessor(trustLinesQ history.QTrustLines) *TrustLinesProcessor {
 	p := &TrustLinesProcessor{trustLinesQ: trustLinesQ}
 	p.reset()
+	p.dbObjectsPool = sync.Pool{
+		New: func() interface{} {
+			return new(history.TrustLine)
+		},
+	}
 	return p
 }
 
@@ -46,10 +55,49 @@ func (p *TrustLinesProcessor) ProcessChange(ctx context.Context, change ingest.C
 	return nil
 }
 
-func (p *TrustLinesProcessor) Commit(ctx context.Context) error {
-	batchUpsertTrustLines := []xdr.LedgerEntry{}
+func trustLineEntryToLedgerKeyString(entry *xdr.LedgerEntry) string {
+	ledgerKey := entry.LedgerKey()
+	key, err := ledgerKey.MarshalBinary()
+	if err != nil {
+		panic(errors.Wrap(err, "Error running MarshalBinaryCompress"))
+	}
 
-	changes := p.cache.GetChanges()
+	return base64.StdEncoding.EncodeToString(key)
+}
+
+func (p *TrustLinesProcessor) entryToDBObject(entry *xdr.LedgerEntry, trustLine *history.TrustLine) {
+	var assetType xdr.AssetType
+	var assetCode, assetIssuer string
+	entry.Data.TrustLine.Asset.MustExtract(&assetType, &assetCode, &assetIssuer)
+
+	liabilities := entry.Data.TrustLine.Liabilities()
+
+	// trustLine.LedgerKey = trustLineEntryToLedgerKeyString(entry)
+	trustLine.AccountID = entry.Data.TrustLine.AccountId.Address()
+	trustLine.AssetType = assetType
+	trustLine.AssetIssuer = assetIssuer
+	trustLine.AssetCode = assetCode
+	// Faster without xdr.marshal
+	trustLine.LedgerKey =
+		fmt.Sprintf(
+			"%s/%s/%s",
+			trustLine.AccountID,
+			trustLine.AssetIssuer,
+			trustLine.AssetCode,
+		)
+	trustLine.Balance = int64(entry.Data.TrustLine.Balance)
+	trustLine.Limit = int64(entry.Data.TrustLine.Limit)
+	trustLine.BuyingLiabilities = int64(liabilities.Buying)
+	trustLine.SellingLiabilities = int64(liabilities.Selling)
+	trustLine.Flags = uint32(entry.Data.TrustLine.Flags)
+	trustLine.LastModifiedLedger = uint32(entry.LastModifiedLedgerSeq)
+	trustLine.Sponsor = ledgerEntrySponsorToNullString(entry)
+}
+
+func (p *TrustLinesProcessor) Commit(ctx context.Context) error {
+	var batchUpsertTrustLines []*history.TrustLine
+
+	changes := p.cache.GetChangesMap()
 	for _, change := range changes {
 		var rowsAffected int64
 		var err error
@@ -59,7 +107,14 @@ func (p *TrustLinesProcessor) Commit(ctx context.Context) error {
 		switch {
 		case change.Post != nil:
 			// Created and updated
-			batchUpsertTrustLines = append(batchUpsertTrustLines, *change.Post)
+			trustLine := p.dbObjectsPool.Get().(*history.TrustLine)
+			p.entryToDBObject(change.Post, trustLine)
+
+			if batchUpsertTrustLines == nil {
+				batchUpsertTrustLines = make([]*history.TrustLine, 0, len(changes))
+			}
+
+			batchUpsertTrustLines = append(batchUpsertTrustLines, trustLine)
 		case change.Pre != nil && change.Post == nil:
 			// Removed
 			action = "removing"
@@ -92,6 +147,11 @@ func (p *TrustLinesProcessor) Commit(ctx context.Context) error {
 		err := p.trustLinesQ.UpsertTrustLines(ctx, batchUpsertTrustLines)
 		if err != nil {
 			return errors.Wrap(err, "errors in UpsertTrustLines")
+		}
+
+		// Release to sync.Pool
+		for _, tline := range batchUpsertTrustLines {
+			p.dbObjectsPool.Put(tline)
 		}
 	}
 

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding"
 	"fmt"
 	"hash"
 	"io"
@@ -138,7 +139,7 @@ func (arch *Archive) VerifyCategoryCheckpoint(cat string, chk uint32) error {
 	}
 	defer rdr.Close()
 
-	var tmp interface{}
+	var tmp encoding.BinaryUnmarshaler
 	var step func() error
 	var reset func()
 
@@ -177,7 +178,7 @@ func (arch *Archive) VerifyCategoryCheckpoint(cat string, chk uint32) error {
 
 	for {
 		reset()
-		if err = rdr.ReadOne(&tmp); err != nil {
+		if err = rdr.ReadOne(tmp); err != nil {
 			if err == io.EOF {
 				break
 			} else {
